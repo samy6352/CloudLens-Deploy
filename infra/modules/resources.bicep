@@ -250,7 +250,12 @@ resource web 'Microsoft.Web/sites@2023-12-01' = {
 
 // Pulls the application code straight from the repository, which is what makes the portal
 // button a genuine one-click rather than "now go and deploy the code yourself".
-resource source 'Microsoft.Web/sites/sourcecontrols@2023-12-01' = {
+//
+// Conditional, because App Service clones anonymously: it cannot authenticate to a private
+// repository, and pointing it at one produces a deployment that succeeds and an app that
+// serves nothing. The scripts leave this empty and zip-deploy from the local clone instead,
+// which works either way.
+resource source 'Microsoft.Web/sites/sourcecontrols@2023-12-01' = if (!empty(repositoryUrl)) {
   parent: web
   name: 'web'
   properties: {

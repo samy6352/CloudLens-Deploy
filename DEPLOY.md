@@ -35,6 +35,11 @@ The whole thing, including the code, with nothing installed locally.
 
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fsamy6352%2FCloudLens-Deploy%2Fmain%2Fazuredeploy.json)
 
+> **This button only works if the repository is public.** The Azure portal fetches
+> `azuredeploy.json` anonymously, and App Service clones the source anonymously too — neither
+> can authenticate to a private repository. If this repo is private, the button returns "not
+> found" and you want [option 2](#2-one-command), which does not depend on GitHub at all.
+
 Fill in the region and an admin email, and press Create. When it finishes, the **Outputs** tab
 of the deployment has the URL.
 
@@ -54,6 +59,9 @@ idempotent and will add the registration without disturbing your data.
 
 Adds what the portal cannot do for you: an Entra app registration, so people sign in with
 their Azure account and see exactly the subscriptions their own RBAC allows.
+
+This path **works whether the repository is public or private**: it deploys the code as a zip
+built from your own clone, so nothing has to be fetchable from GitHub by Azure.
 
 ```bash
 git clone https://github.com/samy6352/CloudLens-Deploy

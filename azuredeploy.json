@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.44.1.10279",
-      "templateHash": "17807359624100703673"
+      "templateHash": "18247818544243527994"
     }
   },
   "parameters": {
@@ -130,9 +130,9 @@
     },
     "repositoryUrl": {
       "type": "string",
-      "defaultValue": "https://github.com/samy6352/CloudLens-Deploy",
+      "defaultValue": "",
       "metadata": {
-        "description": "Git repository to deploy the application code from."
+        "description": "Git repository to deploy the application code from. Leave empty when deploying the code separately — the scripts do a zip deploy from your local clone, which works whether or not this repository is public."
       }
     },
     "branch": {
@@ -206,7 +206,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.44.1.10279",
-              "templateHash": "99039399708709718"
+              "templateHash": "8421510025146926185"
             }
           },
           "parameters": {
@@ -490,6 +490,7 @@
               ]
             },
             {
+              "condition": "[not(empty(parameters('repositoryUrl')))]",
               "type": "Microsoft.Web/sites/sourcecontrols",
               "apiVersion": "2023-12-01",
               "name": "[format('{0}/{1}', variables('webAppName'), 'web')]",

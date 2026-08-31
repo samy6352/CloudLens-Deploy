@@ -11,9 +11,7 @@ resource actually cost.
 
 ## Deploy it into your own Azure
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fsamy6352%2FCloudLens-Deploy%2Fmain%2Fazuredeploy.json)
-
-Or one command, which additionally sets up sign-in with your Azure account:
+**One command** — provisions everything and sets up sign-in with your Azure account:
 
 ```bash
 git clone https://github.com/samy6352/CloudLens-Deploy && cd CloudLens-Deploy
@@ -24,6 +22,9 @@ git clone https://github.com/samy6352/CloudLens-Deploy && cd CloudLens-Deploy
 Around eight minutes, and it provisions everything — web app, AI model, storage, and the role
 assignments without which the app runs perfectly and shows an empty estate. It works in any
 Entra tenant; nothing here is specific to one organisation.
+
+There is also a [portal button](DEPLOY.md#1-the-portal-button), which needs nothing installed
+locally but requires this repository to be public — Azure fetches the template anonymously.
 
 **You need Owner on the subscription** (or Contributor plus User Access Administrator), because
 CloudLens reads cost through a managed identity that has to be granted Cost Management Reader.

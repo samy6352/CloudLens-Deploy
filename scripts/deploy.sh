@@ -156,8 +156,7 @@ OUTPUT=$(az deployment sub create \
       adminEmails="$ADMIN" \
       entraClientId="$CLIENT_ID" \
       entraTenantId="$TENANT_ID" \
-      repositoryUrl="$REPO" \
-      branch="$BRANCH" \
+      repositoryUrl="" \
   -o none 2>&1)
 RC=$?
 set -e
@@ -192,6 +191,32 @@ WEB_APP=$(outputs appName)
 REDIRECT=$(outputs redirectUri)
 info "App:      $WEB_APP"
 info "URL:      $APP_URL"
+
+# ---------------------------------------------------------------- code
+# A zip built here rather than a repository App Service clones for itself. App Service clones
+# anonymously, so a private repository would produce a deployment that succeeds and an app that
+# serves nothing — and this way the code that gets deployed is demonstrably the code in front of
+# you, not whatever happens to be on a branch somewhere.
+step "Deploying the application"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ZIP="$(mktemp -d)/cloudlens.zip"
+
+if git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+  # Tracked files only, so .env, the local warehouse and anything else gitignored cannot be
+  # swept into the package.
+  git -C "$ROOT" archive --format=zip -o "$ZIP" HEAD
+else
+  # A download of the source rather than a clone. Exclude the same things by hand.
+  (cd "$ROOT" && zip -qr "$ZIP" . \
+     -x '.git/*' '*.pyc' '__pycache__/*' 'data/*' '.env' '*.duckdb' '*.log')
+fi
+info "Package: $(du -h "$ZIP" | cut -f1)"
+
+az webapp deploy --resource-group "$RG" --name "$WEB_APP" \
+  --src-path "$ZIP" --type zip --async false -o none \
+  || fail "Could not deploy the application code. The infrastructure is in place, so
+  re-running this script will retry just this step."
+rm -f "$ZIP"
 
 # ---------------------------------------------------------------- redirect URI
 # Now the hostname is known for certain, rather than predicted. Set here rather than at

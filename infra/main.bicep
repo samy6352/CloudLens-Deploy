@@ -63,8 +63,8 @@ param entraTenantId string = ''
 @secure()
 param entraClientSecret string = ''
 
-@description('Git repository to deploy the application code from.')
-param repositoryUrl string = 'https://github.com/samy6352/CloudLens-Deploy'
+@description('Git repository to deploy the application code from. Leave empty when deploying the code separately — the scripts do a zip deploy from your local clone, which works whether or not this repository is public.')
+param repositoryUrl string = ''
 
 @description('Branch to deploy.')
 param branch string = 'main'

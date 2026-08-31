@@ -143,8 +143,7 @@ $out = az deployment sub create `
     adminEmails=$Admin `
     entraClientId=$clientId `
     entraTenantId=$tenantId `
-    repositoryUrl=$Repo `
-    branch=$Branch `
+    repositoryUrl='' `
   -o none 2>&1
 
 if ($LASTEXITCODE -ne 0) {
@@ -181,6 +180,47 @@ $webApp = Get-Output "appName"
 $redirect = Get-Output "redirectUri"
 Info "App:      $webApp"
 Info "URL:      $appUrl"
+
+# ---------------------------------------------------------------- code
+# A zip built here rather than a repository App Service clones for itself. App Service clones
+# anonymously, so a private repository would produce a deployment that succeeds and an app that
+# serves nothing — and this way the code deployed is demonstrably the code in front of you,
+# not whatever happens to be on a branch somewhere.
+Step "Deploying the application"
+$root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$zip = Join-Path ([System.IO.Path]::GetTempPath()) "cloudlens-$(Get-Random).zip"
+
+Push-Location $root
+try {
+  git rev-parse --git-dir 2>$null | Out-Null
+  if ($LASTEXITCODE -eq 0) {
+    # Tracked files only, so .env, the local warehouse and anything else gitignored cannot be
+    # swept into the package.
+    git archive --format=zip -o $zip HEAD
+  } else {
+    # A download of the source rather than a clone. Exclude the same things by hand.
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) "cl-stage-$(Get-Random)"
+    New-Item -ItemType Directory -Path $tmp | Out-Null
+    Get-ChildItem -Path $root -Force | Where-Object {
+      $_.Name -notin @('.git', 'data', '.env', '__pycache__', '.venv')
+    } | Copy-Item -Destination $tmp -Recurse -Force
+    Compress-Archive -Path "$tmp\*" -DestinationPath $zip -Force
+    Remove-Item $tmp -Recurse -Force
+  }
+} finally {
+  Pop-Location
+}
+Info "Package: $([math]::Round((Get-Item $zip).Length / 1MB, 2)) MB"
+
+az webapp deploy --resource-group $ResourceGroup --name $webApp `
+  --src-path $zip --type zip --async false -o none
+if ($LASTEXITCODE -ne 0) {
+  Fail @"
+Could not deploy the application code. The infrastructure is in place, so re-running this
+script will retry just this step.
+"@
+}
+Remove-Item $zip -Force -ErrorAction SilentlyContinue
 
 # ---------------------------------------------------------------- redirect URI
 if ($clientId) {
