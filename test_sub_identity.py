@@ -10,8 +10,8 @@ and the report path never deleted FOCUS's -- both survived, and both were summed
 
 Observed live, on one subscription:
 
-    e3d73cb0-...                 11,266 rows   $1,917.07
-    /subscriptions/e3d73cb0-...   6,219 rows     $981.96
+    11111111-...                 11,266 rows   $1,917.07
+    /subscriptions/11111111-...   6,219 rows     $981.96
 
 The dashboard read $920.98 for a month Azure billed at $476.07. Nothing errored, no tab looked
 broken, and a doubled total still looks like money -- which is why this needs tests rather than
