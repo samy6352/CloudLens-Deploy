@@ -100,8 +100,49 @@ def progress() -> dict[str, Any]:
     }
 
 
+def _identity_has_no_roles() -> str:
+    """Why an empty estate is the deployment's fault rather than the reader's.
+
+    The portal button cannot check anything before it deploys: an ARM template has no way to
+    ask whether the person running it may create a role assignment. The Bicep creates the
+    resources first and the role assignments second — the identity has to exist before it can
+    be granted anything — so a subscription that refuses the second half still produces the
+    first. What is left is a running app with a managed identity that holds nothing, and an
+    estate that looks empty rather than unreadable.
+
+    That is the one case where "check your Azure access" is actively misleading. The reader's
+    access is irrelevant; the *app's* is missing. So say which roles, on which subscription,
+    and give the command — App Service publishes the site and group names in the environment,
+    so it can be a line to paste rather than a shape to fill in.
+    """
+    site = os.getenv("WEBSITE_SITE_NAME", "").strip()
+    group = os.getenv("WEBSITE_RESOURCE_GROUP", "").strip()
+
+    message = (
+        "This deployment's own identity cannot see any Azure subscriptions, so there is "
+        "nothing to load. This is not about your access — the app reads cost as a managed "
+        "identity, and that identity has not been granted Reader and Cost Management Reader. "
+        "It usually means the deployment created its resources but was not allowed to create "
+        "the role assignments, which needs Owner, or Contributor plus User Access "
+        "Administrator."
+    )
+    if site and group:
+        message += (
+            f"\n\nAn administrator can grant them with:\n\n"
+            f"PRINCIPAL=$(az webapp identity show -g {group} -n {site} "
+            f"--query principalId -o tsv)\n"
+            f"for ROLE in \"Reader\" \"Cost Management Reader\"; do\n"
+            f"  az role assignment create --assignee-object-id $PRINCIPAL \\\n"
+            f"    --assignee-principal-type ServicePrincipal \\\n"
+            f"    --role \"$ROLE\" --scope \"/subscriptions/<subscription-id>\"\n"
+            f"done\n\n"
+            f"Role assignments take a few minutes to take effect."
+        )
+    return message
+
+
 def state(rows: int, is_admin: bool, subscriptions: int,
-          ingesting: bool = False) -> dict[str, Any]:
+          ingesting: bool = False, app_identity: bool = False) -> dict[str, Any]:
     """Whether to offer first-run setup, and if not, why not.
 
     Takes the row count rather than reading it, because every caller has already asked the
@@ -112,6 +153,9 @@ def state(rows: int, is_admin: bool, subscriptions: int,
     alone would put "there is no cost data, would you like to set it up?" in front of someone
     whose data is already on its way, and then take it away again when it lands. That is the
     same "empty and loading look identical" confusion this card exists to fix, inverted.
+
+    `app_identity` says who the subscription count was asked *as*. Zero subscriptions means
+    something entirely different depending on the answer, and the two need opposite advice.
     """
     mark = settled()
     running = bool(_progress["running"])
@@ -144,8 +188,9 @@ def state(rows: int, is_admin: bool, subscriptions: int,
                           "an administrator of this deployment can do. Ask one of them to "
                           "sign in and run the first-time setup.")
     elif first_run and subscriptions == 0:
-        out["blocked"] = ("Your account cannot see any Azure subscriptions, so there is "
-                          "nothing to load. Check your Azure access, then reload.")
+        out["blocked"] = (_identity_has_no_roles() if app_identity else
+                          ("Your account cannot see any Azure subscriptions, so there is "
+                           "nothing to load. Check your Azure access, then reload."))
     return out
 
 

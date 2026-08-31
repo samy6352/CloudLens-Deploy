@@ -56,7 +56,12 @@ param(
 
   # Skip the app registration and use a local admin password instead. For tenants that do not
   # let ordinary users register applications.
-  [switch] $NoSso
+  [switch] $NoSso,
+
+  # Run the checks and stop, without creating anything. For finding out whether a subscription
+  # can host CloudLens before committing to it — which is a fair question to want answered
+  # separately, particularly when the subscription belongs to somebody else.
+  [switch] $CheckOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -77,6 +82,7 @@ if ($Subscription) {
   $acct = az account show | ConvertFrom-Json
 }
 
+$subId = $acct.id
 $tenantId = $acct.tenantId
 $signedIn = $acct.user.name
 Info "Subscription: $($acct.name)"
@@ -108,6 +114,131 @@ if (-not $Location) {
   Info "Region:       $Location (override with -Location)"
 }
 
+# ---------------------------------------------------------------- preflight
+#
+# Everything that can refuse this deployment, asked before anything is created.
+#
+# This matters more than it looks. The template creates resources first and role assignments
+# second, because a role assignment needs the managed identity's object id and that identity
+# does not exist until the web app does. So a subscription that cannot create role assignments
+# builds the whole estate and *then* fails, leaving a running app, a real bill and no data —
+# which reads as a successful deployment to everybody except the person looking for their
+# costs.
+#
+# The checks are also reported together rather than one per run. They are independent, and
+# discovering them one at a time is four deployments and half an hour to learn what a single
+# pass can say at once.
+
+Step "Checking this subscription can host CloudLens"
+
+$blockers = [System.Collections.Generic.List[string]]::new()
+$notes = [System.Collections.Generic.List[string]]::new()
+
+# Azure matches RBAC action patterns case-insensitively, and `*` stands for any run of
+# characters including `/` — so `Microsoft.Authorization/*/Write` covers roleAssignments/write.
+function Test-ActionMatch([string] $pattern, [string] $action) {
+  return $action -imatch ('^' + [Regex]::Escape($pattern).Replace('\*', '.*') + '$')
+}
+
+# The authoritative answer to "may I create a role assignment here", which is what the
+# Owner-versus-Contributor distinction actually decides. Contributor carries `*` in its
+# actions and excludes `Microsoft.Authorization/*/Write` in its notActions, so asking for the
+# effective permissions is exact — and free, where the alternative is creating one to find out.
+$roleWrite = 'Microsoft.Authorization/roleAssignments/write'
+$canAssignRoles = $false
+$permJson = az rest --method GET `
+  --url "https://management.azure.com/subscriptions/$subId/providers/Microsoft.Authorization/permissions?api-version=2022-04-01" `
+  -o json 2>$null
+if ($permJson) {
+  foreach ($p in ($permJson | ConvertFrom-Json).value) {
+    $granted = @($p.actions) | Where-Object { Test-ActionMatch $_ $roleWrite }
+    if (-not $granted) { continue }
+    $withheld = @($p.notActions) | Where-Object { Test-ActionMatch $_ $roleWrite }
+    if (-not $withheld) { $canAssignRoles = $true; break }
+  }
+} else {
+  $notes.Add("Could not read your permissions on this subscription; skipping the rights check.")
+}
+
+if (-not $canAssignRoles) {
+  $blockers.Add(@"
+You cannot create role assignments on this subscription.
+    CloudLens grants its managed identity Reader and Cost Management Reader. Without them the
+    app deploys perfectly and reports an empty estate, so this stops now rather than after
+    building one.
+    Fix: ask for Owner, or Contributor plus User Access Administrator.
+"@)
+}
+
+# Providers are registered rather than reported. A missing one is a real failure, but it is
+# also the one obstacle here that can simply be removed without asking anybody for anything.
+foreach ($ns in @('Microsoft.Web', 'Microsoft.CognitiveServices', 'Microsoft.Storage')) {
+  $state = az provider show -n $ns --query registrationState -o tsv 2>$null
+  if ($state -and $state -ne 'Registered') {
+    Info "Registering resource provider $ns"
+    az provider register -n $ns 2>$null | Out-Null
+  }
+}
+
+# App Service quota. This lists what the subscription may create, not merely what the region
+# offers, which is the distinction that catches credit-based subscriptions — they start with
+# zero compute in most regions.
+$wanted = ($Location -replace '\s', '').ToLowerInvariant()
+$skuRegions = az appservice list-locations --sku $Sku --query "[].name" -o tsv 2>$null
+if ($skuRegions) {
+  $match = @($skuRegions) | Where-Object { ($_ -replace '\s', '').ToLowerInvariant() -eq $wanted }
+  if (-not $match) {
+    $blockers.Add(@"
+This subscription has no $Sku App Service quota in $Location.
+    Credit-based subscriptions start with none in most regions.
+    Fix: -Location with another region, or request quota at https://aka.ms/antquotahelp
+"@)
+  }
+}
+
+# Model availability, which is quota of a different kind and independent of the one above —
+# the regions with App Service capacity frequently lack model capacity and the reverse.
+$modelSkus = az cognitiveservices model list -l $AiLocation `
+  --query "[?model.name=='$Model'].model.skus[].name" -o tsv 2>$null
+if ($modelSkus) {
+  if (@($modelSkus) -notcontains $ModelSku) {
+    $offered = (@($modelSkus) | Sort-Object -Unique) -join ', '
+    $blockers.Add(@"
+$Model is not offered as $ModelSku in $AiLocation.
+    That region offers: $offered
+    Fix: -ModelSku with one of those, or -AiLocation with another region.
+"@)
+  }
+} else {
+  $notes.Add("$Model does not appear to be available in $AiLocation at all; try -AiLocation eastus.")
+}
+
+# An existing group is not an error — re-running over the top is the documented way to update,
+# and to add SSO to a deployment that began at the portal button. Saying so removes the doubt.
+if ((az group exists -n $ResourceGroup -o tsv 2>$null) -eq 'true') {
+  # Counted here rather than with a JMESPath `length(@)`, because the Azure CLI on Windows is a
+  # batch file and cmd treats the parentheses as syntax of its own.
+  $count = @(az resource list -g $ResourceGroup --query "[].id" -o tsv 2>$null).Count
+  $notes.Add("Resource group $ResourceGroup already exists with $count resource(s); this run updates it in place.")
+}
+
+foreach ($n in $notes) { Info $n }
+
+if ($blockers.Count -gt 0) {
+  Write-Host ""
+  Write-Host "This subscription cannot host CloudLens yet:" -ForegroundColor Red
+  foreach ($b in $blockers) { Write-Host "  - $b" }
+  Fail "Nothing was created."
+}
+Info "Everything CloudLens needs is available."
+
+if ($CheckOnly) {
+  Write-Host ""
+  Write-Host "Checks passed. Nothing was created." -ForegroundColor Green
+  Write-Host "Re-run without -CheckOnly to deploy."
+  exit 0
+}
+
 # ---------------------------------------------------------------- app registration
 $clientId = ""
 if (-not $NoSso) {
@@ -129,13 +260,18 @@ if (-not $NoSso) {
     $clientId = az ad app create --display-name $displayName `
       --sign-in-audience AzureADMyOrg --query appId -o tsv 2>$null
     if (-not $clientId) {
-      Fail @"
-Could not register the application. Your tenant may restrict this to administrators.
-Re-run with -NoSso to use a local password instead.
-"@
+      # Not fatal. A tenant that reserves app registration for administrators is common, and
+      # guests can essentially never do it — but that only decides how people sign in, not
+      # whether CloudLens can run. Falling back costs a re-run and gets the same estate.
+      Info "Your tenant would not let you register an application."
+      Info "Continuing with a local password instead; the app is otherwise identical."
+      Info "To move to Azure sign-in later, re-run this script once you have the rights."
+      $NoSso = $true
+      $clientId = ""
+    } else {
+      Info "Created registration: $clientId"
+      az ad sp create --id $clientId 2>$null | Out-Null
     }
-    Info "Created registration: $clientId"
-    az ad sp create --id $clientId 2>$null | Out-Null
   }
 }
 

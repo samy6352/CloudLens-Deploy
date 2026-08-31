@@ -27,6 +27,7 @@ MODEL="gpt-4.1-mini"
 MODEL_SKU="GlobalStandard"
 ADMIN=""
 NO_SSO=0
+CHECK_ONLY=0
 SUBSCRIPTION=""
 PASSPHRASE="${CLOUDLENS_PASSPHRASE:-}"
 REPO="https://github.com/samy6352/CloudLens-Deploy"
@@ -48,6 +49,7 @@ CloudLens deployment
   --model-sku SKU       GlobalStandard | Standard               (default: GlobalStandard)
   --subscription ID     Subscription to deploy into             (default: current)
   --no-sso              Skip the app registration and use a local admin password
+  --check-only          Run the checks and stop, without creating anything
   -h, --help            This message
 
 Examples:
@@ -71,6 +73,7 @@ while [[ $# -gt 0 ]]; do
     --repo) REPO="$2"; shift 2 ;;
     --branch) BRANCH="$2"; shift 2 ;;
     --no-sso) NO_SSO=1; shift ;;
+    --check-only) CHECK_ONLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
   esac
@@ -113,6 +116,135 @@ if [[ -z "$LOCATION" ]]; then
   info "Region:       $LOCATION (override with --location)"
 fi
 
+# ---------------------------------------------------------------- preflight
+#
+# Everything that can refuse this deployment, asked before anything is created.
+#
+# This matters more than it looks. The template creates resources first and role assignments
+# second, because a role assignment needs the managed identity's object id and that identity
+# does not exist until the web app does. So a subscription that cannot create role assignments
+# builds the whole estate and *then* fails, leaving a running app, a real bill and no data —
+# which reads as a successful deployment to everybody except the person looking for their
+# costs.
+#
+# The checks are also reported together rather than one per run. They are independent, and
+# discovering them one at a time is four deployments and half an hour to learn what a single
+# pass can say at once.
+
+step "Checking this subscription can host CloudLens"
+
+BLOCKERS=()
+NOTES=()
+
+# The authoritative answer to "may I create a role assignment here", which is what the
+# Owner-versus-Contributor distinction actually decides. Contributor carries `*` in its actions
+# and excludes `Microsoft.Authorization/*/Write` in its notActions, so asking for the effective
+# permissions is exact — and free, where the alternative is creating one to find out.
+#
+# The patterns are matched with bash's own `case` globbing, which is the same semantic Azure
+# uses: `*` stands for any run of characters, `/` included. That keeps this to the Azure CLI
+# and bash, rather than adding a dependency to a script whose whole point is being easy to run.
+WANTED_ACTION="Microsoft.Authorization/roleAssignments/write"
+PERMS=$(az rest --method GET \
+  --url "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.Authorization/permissions?api-version=2022-04-01" \
+  --query "value[].{a: join(';', actions || ['']), n: join(';', notActions || [''])}" \
+  -o tsv 2>/dev/null || echo "")
+
+CAN_ASSIGN_ROLES="unknown"
+if [[ -n "$PERMS" ]]; then
+  CAN_ASSIGN_ROLES="no"
+  shopt -s nocasematch
+  while IFS=$'\t' read -r ACTIONS NOT_ACTIONS; do
+    [[ -z "${ACTIONS:-}" ]] && continue
+    GRANTED=0
+    IFS=';' read -ra ACTION_LIST <<< "$ACTIONS"
+    for PATTERN in "${ACTION_LIST[@]}"; do
+      [[ -z "$PATTERN" ]] && continue
+      case "$WANTED_ACTION" in $PATTERN) GRANTED=1; break ;; esac
+    done
+    [[ $GRANTED -eq 0 ]] && continue
+
+    WITHHELD=0
+    IFS=';' read -ra NOT_LIST <<< "${NOT_ACTIONS:-}"
+    for PATTERN in "${NOT_LIST[@]}"; do
+      [[ -z "$PATTERN" ]] && continue
+      case "$WANTED_ACTION" in $PATTERN) WITHHELD=1; break ;; esac
+    done
+    if [[ $WITHHELD -eq 0 ]]; then CAN_ASSIGN_ROLES="yes"; break; fi
+  done <<< "$PERMS"
+  shopt -u nocasematch
+fi
+
+if [[ "$CAN_ASSIGN_ROLES" == "no" ]]; then
+  BLOCKERS+=("You cannot create role assignments on this subscription.
+    CloudLens grants its managed identity Reader and Cost Management Reader. Without them the
+    app deploys perfectly and reports an empty estate, so this stops now rather than after
+    building one.
+    Fix: ask for Owner, or Contributor plus User Access Administrator.")
+elif [[ "$CAN_ASSIGN_ROLES" != "yes" ]]; then
+  NOTES+=("Could not read your permissions on this subscription; skipping the rights check.")
+fi
+
+# Providers are registered rather than reported. A missing one is a real failure, but it is
+# also the one obstacle here that can simply be removed without asking anybody for anything.
+for NS in Microsoft.Web Microsoft.CognitiveServices Microsoft.Storage; do
+  STATE=$(az provider show -n "$NS" --query registrationState -o tsv 2>/dev/null || echo "")
+  if [[ -n "$STATE" && "$STATE" != "Registered" ]]; then
+    info "Registering resource provider $NS"
+    az provider register -n "$NS" >/dev/null 2>&1 || true
+  fi
+done
+
+# App Service quota. This lists what the subscription may create, not merely what the region
+# offers, which is the distinction that catches credit-based subscriptions — they start with
+# zero compute in most regions.
+WANTED_REGION=$(echo "$LOCATION" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+SKU_REGIONS=$(az appservice list-locations --sku "$SKU" --query "[].name" -o tsv 2>/dev/null || echo "")
+if [[ -n "$SKU_REGIONS" ]]; then
+  if ! echo "$SKU_REGIONS" | tr -d '[:blank:]' | tr '[:upper:]' '[:lower:]' | grep -qx "$WANTED_REGION"; then
+    BLOCKERS+=("This subscription has no $SKU App Service quota in $LOCATION.
+    Credit-based subscriptions start with none in most regions.
+    Fix: --location with another region, or request quota at https://aka.ms/antquotahelp")
+  fi
+fi
+
+# Model availability, which is quota of a different kind and independent of the one above —
+# the regions with App Service capacity frequently lack model capacity and the reverse.
+MODEL_SKUS=$(az cognitiveservices model list -l "$AI_LOCATION" \
+  --query "[?model.name=='${MODEL}'].model.skus[].name" -o tsv 2>/dev/null || echo "")
+if [[ -n "$MODEL_SKUS" ]]; then
+  if ! echo "$MODEL_SKUS" | grep -qx "$MODEL_SKU"; then
+    OFFERED=$(echo "$MODEL_SKUS" | sort -u | paste -sd ', ' -)
+    BLOCKERS+=("$MODEL is not offered as $MODEL_SKU in $AI_LOCATION.
+    That region offers: $OFFERED
+    Fix: --model-sku with one of those, or --ai-location with another region.")
+  fi
+else
+  NOTES+=("$MODEL does not appear to be available in $AI_LOCATION at all; try --ai-location eastus.")
+fi
+
+# An existing group is not an error — re-running over the top is the documented way to update,
+# and to add SSO to a deployment that began at the portal button. Saying so removes the doubt.
+if [[ "$(az group exists -n "$RG" -o tsv 2>/dev/null)" == "true" ]]; then
+  COUNT=$(az resource list -g "$RG" --query "[].id" -o tsv 2>/dev/null | grep -c . || true)
+  NOTES+=("Resource group $RG already exists with ${COUNT} resource(s); this run updates it in place.")
+fi
+
+for N in "${NOTES[@]:-}"; do [[ -n "$N" ]] && info "$N"; done
+
+if [[ ${#BLOCKERS[@]} -gt 0 ]]; then
+  printf '\n\033[31mThis subscription cannot host CloudLens yet:\033[0m\n'
+  for B in "${BLOCKERS[@]}"; do printf '  - %s\n' "$B"; done
+  fail "Nothing was created."
+fi
+info "Everything CloudLens needs is available."
+
+if [[ $CHECK_ONLY -eq 1 ]]; then
+  printf '\n\033[32mChecks passed. Nothing was created.\033[0m\n'
+  printf 'Re-run without --check-only to deploy.\n'
+  exit 0
+fi
+
 # ---------------------------------------------------------------- app registration
 # Created before the infrastructure because the web app needs its client id, and created with
 # the redirect URI the app will end up on — which is derived from the same name hash Bicep
@@ -136,14 +268,23 @@ if [[ $NO_SSO -eq 0 ]]; then
     # hostname, which Bicep derives from a hash of the resource group id. Guessing it now and
     # being wrong produces a sign-in that fails at the final step with an error naming a URI
     # the person never typed.
-    CLIENT_ID=$(az ad app create \
+    if CLIENT_ID=$(az ad app create \
       --display-name "$DISPLAY_NAME" \
       --sign-in-audience AzureADMyOrg \
-      --query appId -o tsv) || fail "Could not register the application. Your tenant may
-    restrict this to administrators — re-run with --no-sso to use a local password instead."
-    info "Created registration: $CLIENT_ID"
-    # A service principal in this tenant, so the app can be consented to and assigned.
-    az ad sp create --id "$CLIENT_ID" >/dev/null 2>&1 || true
+      --query appId -o tsv 2>/dev/null); then
+      info "Created registration: $CLIENT_ID"
+      # A service principal in this tenant, so the app can be consented to and assigned.
+      az ad sp create --id "$CLIENT_ID" >/dev/null 2>&1 || true
+    else
+      # Not fatal. A tenant that reserves app registration for administrators is common, and
+      # guests can essentially never do it — but that only decides how people sign in, not
+      # whether CloudLens can run. Falling back costs a re-run and gets the same estate.
+      info "Your tenant would not let you register an application."
+      info "Continuing with a local password instead; the app is otherwise identical."
+      info "To move to Azure sign-in later, re-run this script once you have the rights."
+      NO_SSO=1
+      CLIENT_ID=""
+    fi
   fi
 fi
 

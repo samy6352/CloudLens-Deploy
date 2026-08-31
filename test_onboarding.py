@@ -104,6 +104,44 @@ check("and is told their Azure access is the problem",
       s.get("blocked", "")[:60])
 
 
+print("\nan empty estate blames whichever identity is actually missing its roles")
+print("=" * 72)
+with_meta(FakeMeta())
+s = onboarding.state(rows=0, is_admin=True, subscriptions=0, app_identity=True)
+check("the deployment's own identity is named, not the reader's account",
+      "not about your access" in (s.get("blocked") or ""),
+      "telling someone to check their access sends them where the problem is not")
+check("the two missing roles are named",
+      "Reader" in (s.get("blocked") or "")
+      and "Cost Management Reader" in (s.get("blocked") or ""))
+check("and the cause is given, because it is not obvious from inside the app",
+      "User Access Administrator" in (s.get("blocked") or ""),
+      "resources deploy before role assignments, so half a deployment looks whole")
+
+os.environ["WEBSITE_SITE_NAME"] = "cloudlens-abc123"
+os.environ["WEBSITE_RESOURCE_GROUP"] = "rg-cloudlens"
+try:
+    s = onboarding.state(rows=0, is_admin=True, subscriptions=0, app_identity=True)
+    blocked = s.get("blocked") or ""
+    check("App Service publishes its own names, so the fix is a line to paste",
+          "cloudlens-abc123" in blocked and "rg-cloudlens" in blocked,
+          blocked[-160:])
+    check("and it is the command that actually grants them",
+          "az role assignment create" in blocked)
+finally:
+    del os.environ["WEBSITE_SITE_NAME"]
+    del os.environ["WEBSITE_RESOURCE_GROUP"]
+
+s = onboarding.state(rows=0, is_admin=True, subscriptions=0, app_identity=True)
+check("without those names it still explains, rather than printing a broken command",
+      "az role assignment create" not in (s.get("blocked") or "")
+      and "not about your access" in (s.get("blocked") or ""))
+
+check("and a reader who genuinely has no access is still told so",
+      "cannot see any Azure subscriptions" in
+      (onboarding.state(rows=0, is_admin=True, subscriptions=0).get("blocked") or ""))
+
+
 print("\nonce answered, never asked again")
 print("=" * 72)
 fake = FakeMeta()

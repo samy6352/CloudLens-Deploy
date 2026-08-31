@@ -1441,8 +1441,24 @@ async def onboarding_state(request: Request) -> JSONResponse:
             log.info("onboarding: could not count subscriptions: %s", str(exc)[:200])
             count = len(warehouse.subscriptions())
 
+    # Zero is the ambiguous answer, and the two things it can mean want opposite advice: the
+    # reader holds no Azure access, or the *deployment* does. Telling someone to check their
+    # own access when the app's managed identity is the thing missing its roles sends them to
+    # look in the one place the problem is not.
+    #
+    # So when it is zero, ask again as the app itself. One extra call, only ever on a page that
+    # is already a dead end, to say which of the two it is instead of guessing.
+    app_identity = False
+    if count == 0:
+        try:
+            app_identity = (await cost.list_subscriptions())["count"] == 0
+        except Exception as exc:  # noqa: BLE001 - fall back to the reader-facing wording
+            log.info("onboarding: could not count the app's own subscriptions: %s",
+                     str(exc)[:200])
+
     return JSONResponse(onboarding.state(rows, bool(user.admin), count,
-                                         ingesting=_ingest_running()))
+                                         ingesting=_ingest_running(),
+                                         app_identity=app_identity))
 
 
 def _ingest_running() -> bool:
