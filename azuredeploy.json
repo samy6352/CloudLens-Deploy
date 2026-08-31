@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.44.1.10279",
-      "templateHash": "18247818544243527994"
+      "templateHash": "10717365959450034673"
     }
   },
   "parameters": {
@@ -141,14 +141,30 @@
       "metadata": {
         "description": "Branch to deploy."
       }
+    },
+    "deploymentPassphrase": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Passphrase required to deploy. Ask whoever gave you this template."
+      }
     }
+  },
+  "variables": {
+    "passphraseHash": "bwsqa5clihtbg",
+    "noPassphrase": "[json('[]')]",
+    "DEPLOYMENT_PASSPHRASE_IS_MISSING_OR_INCORRECT": "[if(equals(uniqueString(parameters('deploymentPassphrase')), variables('passphraseHash')), 'accepted', string(variables('noPassphrase')[0]))]"
   },
   "resources": [
     {
       "type": "Microsoft.Resources/resourceGroups",
       "apiVersion": "2024-03-01",
       "name": "[parameters('resourceGroupName')]",
-      "location": "[parameters('location')]"
+      "location": "[parameters('location')]",
+      "tags": {
+        "application": "CloudLens",
+        "deployment": "[variables('DEPLOYMENT_PASSPHRASE_IS_MISSING_OR_INCORRECT')]"
+      }
     },
     {
       "type": "Microsoft.Resources/deployments",

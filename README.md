@@ -19,12 +19,15 @@ git clone https://github.com/samy6352/CloudLens-Deploy && cd CloudLens-Deploy
 ./scripts/deploy.ps1 -Admin you@yourcompany.com          # Windows
 ```
 
+Or the [portal button](DEPLOY.md#1-the-portal-button), which needs nothing installed locally.
+
+Both ask for a **deployment passphrase**, which is not in this repository — ask whoever pointed
+you here. It keeps deployment deliberate rather than accidental; it is not a security control,
+and the [deployment guide](DEPLOY.md#before-you-start) is straight about why.
+
 Around eight minutes, and it provisions everything — web app, AI model, storage, and the role
 assignments without which the app runs perfectly and shows an empty estate. It works in any
 Entra tenant; nothing here is specific to one organisation.
-
-There is also a [portal button](DEPLOY.md#1-the-portal-button), which needs nothing installed
-locally but requires this repository to be public — Azure fetches the template anonymously.
 
 **You need Owner on the subscription** (or Contributor plus User Access Administrator), because
 CloudLens reads cost through a managed identity that has to be granted Cost Management Reader.

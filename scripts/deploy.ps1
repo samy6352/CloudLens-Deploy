@@ -26,6 +26,10 @@ param(
   # Who may refresh data and run first-time setup. Defaults to whoever is signed in.
   [string] $Admin,
 
+  # Deployment passphrase. Also read from $env:CLOUDLENS_PASSPHRASE; prompted for if neither
+  # is set. Typed as SecureString so it does not land in the PowerShell history file.
+  [System.Security.SecureString] $Passphrase,
+
   [string] $ResourceGroup = "rg-cloudlens",
   [string] $Name = "cloudlens",
 
@@ -80,6 +84,21 @@ Info "Tenant:       $tenantId"
 Info "Signed in as: $signedIn"
 
 if (-not $Admin) { $Admin = $signedIn }
+
+# Asked for rather than defaulted. Prompting beats failing three minutes into a deployment
+# with an ARM error nobody can read.
+if (-not $Passphrase) {
+  if ($env:CLOUDLENS_PASSPHRASE) {
+    $Passphrase = ConvertTo-SecureString $env:CLOUDLENS_PASSPHRASE -AsPlainText -Force
+  } else {
+    $Passphrase = Read-Host "    Deployment passphrase" -AsSecureString
+  }
+}
+$plainPassphrase = [System.Net.NetworkCredential]::new("", $Passphrase).Password
+if (-not $plainPassphrase) {
+  Fail "A deployment passphrase is required. Ask whoever gave you this repository, or set
+CLOUDLENS_PASSPHRASE."
+}
 
 # A region has to be chosen before anything is created, and the honest default is one the
 # subscription already uses rather than a guess that may have no quota behind it.
@@ -143,15 +162,18 @@ $out = az deployment sub create `
     adminEmails=$Admin `
     entraClientId=$clientId `
     entraTenantId=$tenantId `
+    deploymentPassphrase=$plainPassphrase `
     repositoryUrl='' `
   -o none 2>&1
 
 if ($LASTEXITCODE -ne 0) {
   $text = $out -join "`n"
   Write-Host $text
-  # The three refusals that actually happen, each with a different fix. A raw ARM error names
+  # The refusals that actually happen, each with a different fix. A raw ARM error names
   # none of them.
-  if ($text -match "OverQuotaForSku|quota") {
+  if ($text -match "DEPLOYMENT_PASSPHRASE_IS_MISSING_OR_INCORRECT") {
+    Fail "That deployment passphrase is not correct. Ask whoever gave you this repository."
+  } elseif ($text -match "OverQuotaForSku|quota") {
     Fail @"
 This subscription has no App Service quota in $Location. Credit-based subscriptions start
 with none in most regions. Try -Location with another region, or request quota at

@@ -69,9 +69,54 @@ param repositoryUrl string = ''
 @description('Branch to deploy.')
 param branch string = 'main'
 
+@description('Passphrase required to deploy. Ask whoever gave you this template.')
+@secure()
+param deploymentPassphrase string = ''
+
+// ---------------------------------------------------------------- the gate
+//
+// A deliberate speed bump, and worth being straight about what it is and is not.
+//
+// It is not a security boundary. This template is public, so anyone can fork it, delete these
+// few lines and deploy. Nor is there much to defend: a deployment goes into *their*
+// subscription, on *their* bill, reading *their* cost data. Nothing of yours is at risk.
+//
+// What it does do is make deployment deliberate rather than accidental — a button on a public
+// repository is otherwise one curious click away from a resource group somebody did not mean
+// to create and will be billed for. The passphrase turns that into an intentional act by
+// someone who was given it.
+//
+// The passphrase itself is not here: `uniqueString` is one-way, so a reader of this file
+// learns only that a passphrase exists. It is not a cryptographic KDF and would not survive a
+// determined offline attack — which is the same point again. A gate, not a wall.
+//
+// The real protection is on the deployed app, which requires Entra sign-in or a generated
+// password before it shows anybody a single figure.
+var passphraseHash = 'bwsqa5clihtbg'
+
+// Bicep has no `assert` outside experimental builds, so a wrong passphrase is turned into a
+// template-evaluation failure by indexing an empty array. It is built with `json()` rather
+// than written as a literal because Bicep folds a literal empty array at compile time and
+// refuses the index — this defers the same failure to deployment, which is where it belongs.
+//
+// ARM reports the name of the *variable being evaluated*, so that name is the error message:
+// a deployment without the passphrase stops with "The template variable
+// 'DEPLOYMENT_PASSPHRASE_IS_MISSING_OR_INCORRECT' is not valid", which tells someone what to
+// do. Anything else here produces an out-of-bounds index error and leaves them guessing.
+var noPassphrase = json('[]')
+var DEPLOYMENT_PASSPHRASE_IS_MISSING_OR_INCORRECT = uniqueString(deploymentPassphrase) == passphraseHash
+  ? 'accepted'
+  : string(noPassphrase[0])
+
 resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: resourceGroupName
   location: location
+  tags: {
+    application: 'CloudLens'
+    // Referencing the guard here is what forces ARM to evaluate it. An unused variable is
+    // optimised away, and a gate that is optimised away is not a gate.
+    deployment: DEPLOYMENT_PASSPHRASE_IS_MISSING_OR_INCORRECT
+  }
 }
 
 module resources 'modules/resources.bicep' = {

@@ -11,6 +11,18 @@ resources.
 
 ## Before you start
 
+**You will need the deployment passphrase.** It is not in this repository — ask whoever pointed
+you here. All three routes below ask for it.
+
+> It is a speed bump, not a security control, and worth being straight about. This repository is
+> public: anyone can fork it and remove the check. There is also not much to defend, because a
+> deployment goes into *your* subscription, on *your* bill, reading *your* cost data. What the
+> passphrase does is keep deployment deliberate — a public template is otherwise one curious
+> click away from a resource group somebody did not mean to create and will be billed for.
+>
+> The protection that matters is on the deployed app, which requires Entra sign-in or a
+> generated password before it shows anybody a single figure.
+
 **You need Owner on the subscription**, or Contributor *plus* User Access Administrator.
 Not because CloudLens changes anything — it only ever reads — but because it reads cost with a
 managed identity, and granting that identity **Cost Management Reader** is a role assignment.
@@ -35,13 +47,11 @@ The whole thing, including the code, with nothing installed locally.
 
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fsamy6352%2FCloudLens-Deploy%2Fmain%2Fazuredeploy.json)
 
-> **This button only works if the repository is public.** The Azure portal fetches
-> `azuredeploy.json` anonymously, and App Service clones the source anonymously too — neither
-> can authenticate to a private repository. If this repo is private, the button returns "not
-> found" and you want [option 2](#2-one-command), which does not depend on GitHub at all.
+Fill in the region, an admin email and the **deployment passphrase**, and press Create. When it
+finishes, the **Outputs** tab of the deployment has the URL.
 
-Fill in the region and an admin email, and press Create. When it finishes, the **Outputs** tab
-of the deployment has the URL.
+Without the right passphrase the deployment stops immediately, before anything is created, with
+an error naming `DEPLOYMENT_PASSPHRASE_IS_MISSING_OR_INCORRECT`.
 
 Sign-in is a **local admin account**, because a portal deployment cannot register an
 application for you. The password is printed once into the log:
@@ -60,9 +70,6 @@ idempotent and will add the registration without disturbing your data.
 Adds what the portal cannot do for you: an Entra app registration, so people sign in with
 their Azure account and see exactly the subscriptions their own RBAC allows.
 
-This path **works whether the repository is public or private**: it deploys the code as a zip
-built from your own clone, so nothing has to be fetchable from GitHub by Azure.
-
 ```bash
 git clone https://github.com/samy6352/CloudLens-Deploy
 cd CloudLens-Deploy
@@ -75,9 +82,14 @@ cd CloudLens-Deploy
 ./scripts/deploy.ps1 -Admin you@yourcompany.com
 ```
 
+Both prompt for the passphrase without echoing it. For unattended runs, set
+`CLOUDLENS_PASSPHRASE` in the environment instead of passing it on the command line, where it
+would be recorded in your shell history.
+
 Useful switches:
 
 ```bash
+--passphrase PHRASE          # or set CLOUDLENS_PASSPHRASE; prompted for otherwise
 --location westeurope        # where the app runs; try another if quota fails
 --ai-location swedencentral  # where the model lives
 --model-sku Standard         # if GlobalStandard is not offered in your AI region
@@ -93,6 +105,7 @@ Both scripts are safe to re-run. Failed halfway? Run it again.
 
 ```bash
 azd auth login
+azd env set DEPLOYMENT_PASSPHRASE '<the passphrase>'
 azd up
 ```
 
@@ -158,6 +171,11 @@ got yet, in the background.
 ---
 
 ## When it does not work
+
+### "DEPLOYMENT_PASSPHRASE_IS_MISSING_OR_INCORRECT"
+
+The passphrase was wrong or missing. Nothing was created — the deployment stops during template
+evaluation, before ARM touches your subscription. Ask whoever pointed you at this repository.
 
 ### "This subscription has no App Service quota in ..."
 

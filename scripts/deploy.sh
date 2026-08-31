@@ -28,6 +28,7 @@ MODEL_SKU="GlobalStandard"
 ADMIN=""
 NO_SSO=0
 SUBSCRIPTION=""
+PASSPHRASE="${CLOUDLENS_PASSPHRASE:-}"
 REPO="https://github.com/samy6352/CloudLens-Deploy"
 BRANCH="main"
 
@@ -36,6 +37,8 @@ usage() {
 CloudLens deployment
 
   --admin EMAIL         Who may refresh data and run first-time setup. Defaults to you.
+  --passphrase PHRASE   Deployment passphrase. Also read from CLOUDLENS_PASSPHRASE.
+                        Prompted for if not supplied.
   --resource-group NAME Resource group to create or reuse       (default: rg-cloudlens)
   --name NAME           Base name for resources                 (default: cloudlens)
   --location REGION     Region for the app. Must have App Service quota.
@@ -56,6 +59,7 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --admin) ADMIN="$2"; shift 2 ;;
+    --passphrase) PASSPHRASE="$2"; shift 2 ;;
     --resource-group) RG="$2"; shift 2 ;;
     --name) APP_NAME="$2"; shift 2 ;;
     --location) LOCATION="$2"; shift 2 ;;
@@ -91,6 +95,15 @@ info "Tenant:       $TENANT_ID"
 info "Signed in as: $SIGNED_IN"
 
 [[ -z "$ADMIN" ]] && ADMIN="$SIGNED_IN"
+
+# Asked for rather than defaulted, and read with -s so it does not end up in a shell history
+# file or a CI log. Prompting beats failing three minutes into a deployment with an ARM error.
+if [[ -z "$PASSPHRASE" ]]; then
+  read -r -s -p "    Deployment passphrase: " PASSPHRASE
+  echo
+  [[ -z "$PASSPHRASE" ]] && fail "A deployment passphrase is required. Ask whoever gave you
+    this repository, or set CLOUDLENS_PASSPHRASE."
+fi
 
 # A region has to be chosen before anything is created, and the honest default is the one the
 # subscription is already using rather than a guess that may have no quota.
@@ -156,6 +169,7 @@ OUTPUT=$(az deployment sub create \
       adminEmails="$ADMIN" \
       entraClientId="$CLIENT_ID" \
       entraTenantId="$TENANT_ID" \
+      deploymentPassphrase="$PASSPHRASE" \
       repositoryUrl="" \
   -o none 2>&1)
 RC=$?
@@ -163,9 +177,11 @@ set -e
 
 if [[ $RC -ne 0 ]]; then
   echo "$OUTPUT" >&2
-  # The three refusals that actually happen, each with a different fix. A raw ARM error names
+  # The refusals that actually happen, each with a different fix. A raw ARM error names
   # none of them.
-  if grep -qi "OverQuotaForSku\|quota" <<<"$OUTPUT"; then
+  if grep -q "DEPLOYMENT_PASSPHRASE_IS_MISSING_OR_INCORRECT" <<<"$OUTPUT"; then
+    fail "That deployment passphrase is not correct. Ask whoever gave you this repository."
+  elif grep -qi "OverQuotaForSku\|quota" <<<"$OUTPUT"; then
     fail "This subscription has no App Service quota in $LOCATION. Credit-based
     subscriptions start with none in most regions. Try --location with another region, or
     request quota at https://aka.ms/antquotahelp"
