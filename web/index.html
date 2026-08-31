@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark light" />
+  <meta name="theme-color" content="#1B1A19" />
+  <meta name="description" content="CloudLens — see, analyze, optimize. Total clarity for your cloud spend: Azure cost and waste, broken down by area, with an agent alongside." />
+  <title>CloudLens</title>
+
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/assets/app.css" />
+
+  <!-- Theme is applied before the stylesheet paints. Deferring this to app.js would show a
+       dark frame to someone who chose light, which is the one bug people always notice. Small
+       enough to inline; a separate file would be another blocking request.
+
+       The rail's collapsed state rides along for the same reason: applied after paint it would
+       show a full-width rail that snaps narrow, and the board would reflow under the reader. -->
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem("costTheme");
+        var theme = saved === "light" || saved === "dark"
+          ? saved
+          : (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+        document.documentElement.dataset.theme = theme;
+      } catch (e) {
+        document.documentElement.dataset.theme = "dark";
+      }
+      try {
+        // Set on <html>: <body> does not exist yet, and the class is mirrored onto body once it
+        // does. Both are matched by the stylesheet so neither moment is unstyled.
+        if (JSON.parse(localStorage.getItem("railMini")) === true) {
+          document.documentElement.classList.add("rail-mini");
+        }
+      } catch (e) { /* no stored preference — full width, which is the default */ }
+    })();
+  </script>
+
+  <!-- Vendored, not CDN: no third-party round trips, works offline, no supply-chain risk.
+       Chart.js (201 KB) and the markdown pair (57 KB) are both fetched on demand — this is a
+       dashboard first, and a session that never asks a question should never pay for them. -->
+  <script src="/assets/dashboard.js" type="module"></script>
+</head>
+<body>
+  <!-- Keyboard users otherwise tab through the whole header and a twenty-item rail before
+       reaching the numbers they came for. Visible only when focused. -->
+  <a class="skip-link" href="#tabBody">Skip to content</a>
+  <header class="bar">
+    <div class="brand">
+      <!-- Who runs this, then what it is. Separated by a rule so the two marks read as two
+           statements rather than one compound logo. -->
+      <img class="ms-mark" src="/assets/microsoft.svg" width="18" height="18"
+           alt="Microsoft" />
+      <span class="brand-rule" aria-hidden="true"></span>
+      <span class="dot" id="dot" role="img" aria-label="Service status"></span>
+      <img class="mark" src="/assets/logo.svg" width="22" height="22" alt="" />
+      <h1><span class="wm-1">Cloud</span><span class="wm-2">Lens</span></h1>
+    </div>
+
+    <div class="bar-right">
+      <div class="period" id="period" role="group" aria-label="Reporting period">
+        <button type="button" data-days="7">7d</button>
+        <button type="button" data-days="30" class="on">30d</button>
+        <button type="button" data-days="60">60d</button>
+        <button type="button" data-days="90">90d</button>
+      </div>
+
+      <!-- Display currency. A view, never storage: the warehouse keeps what Azure billed, so a
+           converted figure can always be traced back to the invoice. -->
+      <select id="currency" class="currency" aria-label="Display currency" hidden></select>
+
+      <div class="picker" id="picker">
+        <button class="picker-btn" id="pickerBtn" aria-haspopup="listbox"
+                aria-expanded="false" aria-controls="pickerMenu">
+          <span id="pickerLabel">Subscriptions</span>
+          <span class="caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="picker-menu" id="pickerMenu" role="listbox" aria-multiselectable="true"
+             aria-label="Subscriptions to analyse" hidden>
+          <div class="picker-head">
+            <span>Analyse</span>
+            <button class="link" id="pickAll">Select all</button>
+          </div>
+          <div id="pickerList"></div>
+        </div>
+      </div>
+
+      <div class="menu-wrap" id="exportWrap">
+        <button class="ghost" id="exportBtn" aria-haspopup="menu" aria-expanded="false"
+                aria-controls="exportMenu" title="Download this report">Export</button>
+        <div class="drop" id="exportMenu" role="menu" hidden>
+          <div class="head">Download report</div>
+          <a data-fmt="xlsx" role="menuitem" href="/api/report/xlsx">Excel workbook
+            <span class="sub">Every area on its own sheet, with charts</span></a>
+          <a data-fmt="pptx" role="menuitem" href="/api/report/pptx">PowerPoint deck
+            <span class="sub">Editable charts, one slide per area</span></a>
+          <a data-fmt="csv" role="menuitem" href="/api/report/csv">CSV
+            <span class="sub">One flat table, opens anywhere</span></a>
+          <a data-fmt="md" role="menuitem" href="/api/report/md">Markdown
+            <span class="sub">For a ticket, wiki or pull request</span></a>
+          <hr />
+          <a data-raw="csv" role="menuitem" href="/api/costs/raw.csv">Raw cost rows
+            <span class="sub">Every charge, for the subscriptions you selected</span></a>
+          <hr />
+          <button data-fmt="print" role="menuitem">Print or save as PDF
+            <span class="sub">Uses your browser's print dialog</span></button>
+          <button data-fmt="custom" role="menuitem">Choose what to include…
+            <span class="sub">Opens the Export data tab</span></button>
+        </div>
+      </div>
+
+      <div class="refresh" id="refresh" hidden>
+        <button class="ghost" id="refreshBtn" aria-haspopup="menu" aria-expanded="false"
+                aria-controls="refreshMenu" title="Load newer cost data">
+          <span id="refreshLabel">Refresh data</span>
+        </button>
+        <div class="refresh-menu" id="refreshMenu" role="menu" hidden></div>
+      </div>
+
+      <button id="themeBtn" class="ghost icon-btn" title="Switch between light and dark"
+              aria-label="Switch theme">
+        <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true" focusable="false">
+          <!-- Sun and moon in one glyph: the moon is the sun's disc with a bite taken out,
+               animated by moving the mask circle rather than swapping icons. -->
+          <mask id="moonMask">
+            <rect width="100%" height="100%" fill="#fff" />
+            <circle class="bite" cx="17" cy="4" r="6" fill="#000" />
+          </mask>
+          <circle class="disc" cx="10" cy="10" r="4.6" fill="currentColor" mask="url(#moonMask)" />
+          <g class="rays" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <line x1="10" y1="1.5" x2="10" y2="3" /><line x1="10" y1="17" x2="10" y2="18.5" />
+            <line x1="1.5" y1="10" x2="3" y2="10" /><line x1="17" y1="10" x2="18.5" y2="10" />
+            <line x1="4" y1="4" x2="5" y2="5" /><line x1="15" y1="15" x2="16" y2="16" />
+            <line x1="16" y1="4" x2="15" y2="5" /><line x1="5" y1="15" x2="4" y2="16" />
+          </g>
+        </svg>
+      </button>
+
+      <div class="who" id="who" hidden>
+        <span class="name" id="whoName"></span>
+        <span class="tag" id="whoAdmin" hidden>admin</span>
+        <button class="ghost" id="signout" title="Sign out">Sign out</button>
+      </div>
+
+      <button id="askToggle" class="ghost ask-toggle" aria-expanded="true"
+              aria-controls="side" hidden>Ask</button>
+    </div>
+  </header>
+
+  <!-- Refresh progress. A strip rather than a spinner on the button: a refresh takes minutes,
+       and a control that only looks busy is what makes someone press it again, or give up and
+       reload the page mid-ingest. Sits under the header so it is visible from every tab. -->
+  <div class="ingest" id="ingest" hidden role="status" aria-live="polite">
+    <div class="ingest-bar"><span class="ingest-fill" id="ingestFill"></span></div>
+    <div class="ingest-row">
+      <span class="ingest-what" id="ingestWhat">Starting…</span>
+      <span class="ingest-meta">
+        <span id="ingestPct">0%</span>
+        <span class="ingest-sep">·</span>
+        <span id="ingestElapsed">0:00</span>
+      </span>
+    </div>
+    <p class="ingest-note" id="ingestNote">This runs on Azure and takes a few minutes. You can
+      keep using the dashboard — the numbers update on their own when it finishes.</p>
+  </div>
+
+  <!-- The analyst. Replaces the chat bubble: it has states to report — thinking, analysing,
+       what it found — and a bubble cannot report anything. -->
+  <button id="chatFab" type="button" aria-controls="side" aria-expanded="false"></button>
+
+  <div class="glance" id="glance" aria-label="Cost summary">
+    <div class="tile loading"><span class="k">Month to date</span><span class="v">—</span></div>
+    <div class="tile loading"><span class="k">Last month</span><span class="v">—</span></div>
+    <div class="tile loading"><span class="k">Forecast 30d</span><span class="v">—</span></div>
+    <div class="tile loading"><span class="k">Budget</span><span class="v">—</span></div>
+    <div class="tile loading"><span class="k">Local data</span><span class="v">—</span></div>
+  </div>
+
+  <!-- Subscriptions this person can see that the warehouse has not loaded yet. Empty and
+       still-loading look identical on a dashboard, and only one of them is a fact about
+       their spend, so the difference is stated here rather than left to be inferred. -->
+  <!-- First run: an empty warehouse and an estate that genuinely spent nothing draw the same
+       dashboard, and only one of them is a fact about someone's spend. This says which, and
+       offers to go and find the data. It replaces the board rather than sitting above it,
+       because there is nothing behind it worth looking at. -->
+  <div id="firstRun" hidden></div>
+
+  <div id="backfill" hidden></div>
+
+  <div class="shell" id="shell">
+    <!-- A rail rather than a tab strip. Eleven areas plus a builder never fit across the top
+         once the agent panel is open — the last of them were being clipped — and a vertical
+         list also gives each one room for its own number without crowding. -->
+    <nav class="rail" id="tabs" role="tablist" aria-label="Cost areas">
+      <!-- Built from /api/dashboard/sections, so the rail matches the estate, not a guess. -->
+    </nav>
+
+    <main class="board">
+      <div class="board-body" id="tabBody" role="tabpanel" tabindex="-1">
+        <p class="board-loading">Loading…</p>
+      </div>
+
+      <!-- The analysis covers the board rather than replacing it: closing returns you to the
+           tab you were reading, at the position you were at. -->
+      <section class="analysis-view" id="analysisView" tabindex="-1" hidden
+               aria-label="AI analysis">
+        <header class="an-head">
+          <div class="an-head-id">
+            <span class="an-head-mark" aria-hidden="true"></span>
+            <div>
+              <h2>AI Analysis</h2>
+              <p>Every source, read together and ranked by what it is worth</p>
+            </div>
+          </div>
+          <button class="ghost icon" id="analysisClose" title="Close the analysis"
+                  aria-label="Close the analysis">✕</button>
+        </header>
+        <div class="an-scroll" id="analysisBody">
+          <div class="an-empty">
+            <h3>Ready when you are</h3>
+            <p>Reads spend, idle resources, utilisation, anomalies, commitments, budgets and
+              tags, then reports what is worth acting on — with the reasoning behind each one.</p>
+            <button class="primary" id="runAnalysis">Analyse this estate</button>
+            <p class="an-note">Around half a minute. Every figure is carried from a tab you can
+              open yourself; nothing here is estimated.</p>
+          </div>
+        </div>
+
+        <!-- The conversation takes the whole panel while it is running. An answer with a table
+             in it needs the room, and the findings are one click away rather than gone. The
+             chat element itself is moved in here from the side panel rather than duplicated,
+             so there is one renderer and one transcript however you got to it. -->
+        <div class="an-conversation" id="anConversation" hidden>
+          <div class="an-conv-head">
+            <button type="button" class="an-back" id="anBack">
+              <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <path d="M10 4L6 8l4 4" fill="none" stroke="currentColor" stroke-width="1.6"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              Findings
+            </button>
+            <span class="an-conv-title">Answering from your analysis</span>
+          </div>
+        </div>
+
+        <!-- The follow-up. Pinned to the foot of the analysis rather than left in the side
+             panel: someone who has just read that two VMs are idle should be able to ask which
+             ones without going to find the chat first. -->
+        <footer class="an-ask-bar">
+          <div class="an-ask-inner">
+            <div class="an-suggest" id="anSuggest" role="group"
+                 aria-label="Suggested questions"></div>
+            <form id="anAskForm">
+              <label class="sr-only" for="anAsk">Ask about your costs</label>
+              <input id="anAsk" type="text" autocomplete="off"
+                     placeholder="Ask about cost, optimisation, or anything else in Azure…" />
+              <button type="submit" class="primary" id="anAskSend">Ask</button>
+            </form>
+          </div>
+        </footer>
+      </section>
+    </main>
+
+    <aside class="side" id="side" aria-label="Ask about your costs">
+      <div class="side-head">
+        <h2>Ask about your costs</h2>
+        <div class="side-actions">
+          <button id="reset" class="ghost" title="Start a new conversation">New</button>
+          <button id="sideClose" class="ghost icon" title="Hide the panel"
+                  aria-label="Hide the panel">✕</button>
+        </div>
+      </div>
+
+      <div class="chat-shell">
+        <div id="chat" tabindex="-1">
+          <section class="intro">
+            <p class="muted" id="introScope">Covers every subscription your signed-in account can see. Read-only.</p>
+            <div class="chips">
+              <button class="chip">What am I wasting money on?</button>
+              <button class="chip">Why has my bill changed?</button>
+              <button class="chip">Chart the top 10 services by cost</button>
+              <button class="chip">Are any of my VMs idle?</button>
+            </div>
+          </section>
+        </div>
+        <button class="jump" id="jump" hidden>Jump to latest ↓</button>
+      </div>
+
+      <footer class="composer">
+        <form id="form">
+          <label class="sr-only" for="q">Ask about your Azure costs</label>
+          <textarea id="q" rows="1" placeholder="Ask about your Azure costs…" autocomplete="off"
+                    enterkeyhint="send"></textarea>
+          <button type="submit" id="send" class="primary">Ask</button>
+          <button type="button" id="stop" class="ghost" hidden>Stop</button>
+        </form>
+      </footer>
+    </aside>
+  </div>
+
+  <!-- Streaming answers are announced here rather than on every token, which would flood a
+       screen reader. app.js posts one concise update per meaningful step. -->
+  <p class="sr-only" id="live" role="status" aria-live="polite"></p>
+</body>
+</html>

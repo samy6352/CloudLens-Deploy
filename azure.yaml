@@ -1,0 +1,20 @@
+# Azure Developer CLI support, for teams that already use it.
+#
+# `azd up` provisions the infrastructure and deploys the code in one step, and `azd down`
+# removes everything. It is the third way in, alongside the portal button and the scripts —
+# offered because a team standardised on azd should not have to learn a bespoke script to
+# deploy one more app.
+name: cloudlens
+metadata:
+  template: cloudlens@1.0.0
+
+infra:
+  provider: bicep
+  path: infra
+  module: main
+
+services:
+  web:
+    project: .
+    language: py
+    host: appservice

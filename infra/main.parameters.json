@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "resourceGroupName": {
+      "value": "rg-cloudlens"
+    },
+    "appName": {
+      "value": "cloudlens"
+    },
+    "location": {
+      "value": "eastus"
+    },
+    "aiLocation": {
+      "value": "eastus"
+    },
+    "sku": {
+      "value": "B1"
+    },
+    "modelName": {
+      "value": "gpt-4.1-mini"
+    },
+    "modelSku": {
+      "value": "GlobalStandard"
+    },
+    "modelCapacity": {
+      "value": 20
+    },
+    "adminEmails": {
+      "value": ""
+    },
+    "entraClientId": {
+      "value": ""
+    },
+    "entraTenantId": {
+      "value": ""
+    }
+  }
+}

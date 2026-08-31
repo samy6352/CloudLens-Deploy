@@ -1,0 +1,52 @@
+<!-- CloudLens mark.
+
+     A cloud holding a rising bar chart, with a lens over its lower right. The three parts are
+     the three words: the cloud is the estate, the bars are what it costs, the lens is looking
+     at it properly.
+
+     Flat colour, not gradients. A gradient mark has to be re-tuned for every surface it lands
+     on and never quite matches the one blue the rest of the interface uses — and at 16px in a
+     browser tab the ramp is invisible anyway, so it is cost without benefit. Three solid values
+     of one hue give the same depth reading and stay exact wherever they are placed.
+
+     The bars keep the supporting accents because they are the one place in the mark where
+     *different things* are being shown; everything else is one subject and takes one colour.
+
+     currentColor is deliberately not used — the mark keeps its own identity on both themes —
+     but the values are chosen to hold contrast on either. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img"
+     aria-label="CloudLens">
+  <defs>
+    <!-- The lens and the cloud are the same hue, so where they cross they would fuse into one
+         shape. Cutting the lens plus a little air out of everything behind it keeps the glass
+         reading as glass, without painting a background colour that would only be right on one
+         of the two themes. -->
+    <mask id="cl-lens-gap">
+      <rect width="100" height="100" fill="#fff"/>
+      <circle cx="69" cy="59" r="17.5" fill="#000"/>
+      <path d="M77.5 67.5 L87 77" stroke="#000" stroke-width="14" stroke-linecap="round"/>
+    </mask>
+  </defs>
+
+  <g mask="url(#cl-lens-gap)">
+    <!-- Cloud: three lobes over a flat base, drawn as one open outline rather than overlapping
+         circles, so the stroke never doubles up where the lobes meet. -->
+    <path d="M74 68 L33 68
+             A14 14 0 0 1 34.11 40.04
+             A20 20 0 0 1 73.90 40.00
+             A14 14 0 0 1 74 68 Z"
+          fill="none" stroke="#0078D4" stroke-width="7"
+          stroke-linejoin="round" stroke-linecap="round"/>
+
+    <rect x="36" y="50" width="8" height="14" rx="1.5" fill="#0E7C86"/>
+    <rect x="47" y="41" width="8" height="23" rx="1.5" fill="#107C10"/>
+    <rect x="58" y="32" width="8" height="32" rx="1.5" fill="#0078D4"/>
+  </g>
+
+  <!-- The lens sits last so it reads as being in front, the way a glass would. A darker step of
+       the same blue rather than a second hue: it is part of the same object. -->
+  <g fill="none" stroke="#005A9E" stroke-linecap="round">
+    <circle cx="69" cy="59" r="12" stroke-width="6"/>
+    <path d="M77.5 67.5 L87 77" stroke-width="7"/>
+  </g>
+</svg>

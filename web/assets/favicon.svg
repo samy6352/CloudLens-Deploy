@@ -1,0 +1,42 @@
+<!-- CloudLens app icon.
+
+     Not the same file as logo.svg, on purpose. The full mark is a fine outline with a lens
+     crossing it; at 16px in a browser tab that collapses into a blue smudge. This is the same
+     idea drawn for the size it is actually used at — a filled tile, heavier strokes, the handle
+     shortened, and the bars widened until they survive being three pixels tall.
+
+     The tile also solves the background problem. A tab strip may be near-black or near-white
+     depending on the browser and the OS theme, and a mark that has to work on both ends up
+     working well on neither; carrying its own field means it always sits on the colour it was
+     drawn for. Solid Microsoft blue rather than a dark tile: at favicon size a filled shape
+     reads from further away than an outline on a dark ground, and the blue is the one thing
+     about this mark someone will recognise in a row of twenty tabs. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img"
+     aria-label="CloudLens">
+  <defs>
+    <mask id="fv-gap">
+      <rect width="100" height="100" fill="#fff"/>
+      <circle cx="70" cy="60" r="19" fill="#000"/>
+      <path d="M79 69 L88 78" stroke="#000" stroke-width="16" stroke-linecap="round"/>
+    </mask>
+  </defs>
+
+  <rect width="100" height="100" rx="18" fill="#0078D4"/>
+
+  <g mask="url(#fv-gap)">
+    <path d="M72 70 L32 70
+             A15 15 0 0 1 33.6 41.2
+             A21 21 0 0 1 72.3 41.0
+             A15 15 0 0 1 72 70 Z"
+          fill="none" stroke="#FFFFFF" stroke-width="9"
+          stroke-linejoin="round" stroke-linecap="round"/>
+    <rect x="35" y="51" width="9.5" height="15" rx="1.5" fill="#8FD9E8"/>
+    <rect x="47.5" y="42" width="9.5" height="24" rx="1.5" fill="#9BD99B"/>
+    <rect x="60" y="33" width="9.5" height="33" rx="1.5" fill="#FFFFFF"/>
+  </g>
+
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="round">
+    <circle cx="70" cy="60" r="13" stroke-width="8"/>
+    <path d="M79 69 L88 78" stroke-width="9"/>
+  </g>
+</svg>

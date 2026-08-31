@@ -1,0 +1,18 @@
+# Shell scripts must keep LF endings whatever platform they are checked out on. A deploy.sh
+# with CRLF fails on the first line with "syntax error near unexpected token", which reads as a
+# broken script rather than as a line-ending problem — and it is checked out on Windows far
+# more often than it is written there.
+*.sh text eol=lf
+
+# Bicep and JSON templates are read by Azure, not by a shell, but keeping them LF avoids noisy
+# whole-file diffs when someone edits on a different platform.
+*.bicep text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+*.py text
+*.md text
+*.js text
+*.css text
+*.html text

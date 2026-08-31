@@ -1,0 +1,660 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.44.1.10279",
+      "templateHash": "17807359624100703673"
+    }
+  },
+  "parameters": {
+    "resourceGroupName": {
+      "type": "string",
+      "defaultValue": "rg-cloudlens",
+      "metadata": {
+        "description": "Name for the resource group to create or reuse."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[deployment().location]",
+      "metadata": {
+        "description": "Region for the app and storage. Must have App Service quota — many subscriptions have none in many regions, so if deployment fails on quota, try another."
+      }
+    },
+    "aiLocation": {
+      "type": "string",
+      "defaultValue": "eastus",
+      "allowedValues": [
+        "eastus",
+        "eastus2",
+        "westus",
+        "westus3",
+        "swedencentral",
+        "westeurope",
+        "northeurope",
+        "uksouth",
+        "australiaeast",
+        "japaneast"
+      ],
+      "metadata": {
+        "description": "Region for the AI account. Deliberately separate from `location`: App Service quota and model quota are independent constraints, and the regions that have one frequently lack the other. Leave as-is unless you need the model in a particular geography."
+      }
+    },
+    "appName": {
+      "type": "string",
+      "defaultValue": "cloudlens",
+      "minLength": 3,
+      "maxLength": 12,
+      "metadata": {
+        "description": "Base name for resources. Lowercase letters and numbers only."
+      }
+    },
+    "sku": {
+      "type": "string",
+      "defaultValue": "B1",
+      "allowedValues": [
+        "B1",
+        "B2",
+        "B3",
+        "S1",
+        "P0v3",
+        "P1v3"
+      ],
+      "metadata": {
+        "description": "App Service plan size. B1 is the smallest with Always On, which scheduled loads need."
+      }
+    },
+    "modelName": {
+      "type": "string",
+      "defaultValue": "gpt-4.1-mini",
+      "allowedValues": [
+        "gpt-4.1-mini",
+        "gpt-4.1",
+        "gpt-4o",
+        "gpt-4.1-nano"
+      ],
+      "metadata": {
+        "description": "Model to deploy. gpt-4.1-mini is the cheapest current model with wide regional quota. Avoid the gpt-5 reasoning models: the agent sends temperature=0.1, which they reject."
+      }
+    },
+    "modelCapacity": {
+      "type": "int",
+      "defaultValue": 20,
+      "minValue": 1,
+      "maxValue": 1000,
+      "metadata": {
+        "description": "Tokens-per-minute quota for the model, in thousands."
+      }
+    },
+    "modelSku": {
+      "type": "string",
+      "defaultValue": "GlobalStandard",
+      "allowedValues": [
+        "GlobalStandard",
+        "Standard",
+        "DataZoneStandard"
+      ],
+      "metadata": {
+        "description": "Model deployment SKU. GlobalStandard has the widest quota but is not offered in every region — if deployment fails on SKU, try Standard, or pick a different region."
+      }
+    },
+    "adminEmails": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Email addresses allowed to trigger a refresh and run first-time setup."
+      }
+    },
+    "entraClientId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Entra app registration (client) id for SSO. Leave empty to use a local admin account."
+      }
+    },
+    "entraTenantId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Entra tenant id for SSO. Defaults to the tenant this subscription belongs to."
+      }
+    },
+    "entraClientSecret": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Client secret, only if the app registration uses a Web redirect URI."
+      }
+    },
+    "repositoryUrl": {
+      "type": "string",
+      "defaultValue": "https://github.com/samy6352/CloudLens-Deploy",
+      "metadata": {
+        "description": "Git repository to deploy the application code from."
+      }
+    },
+    "branch": {
+      "type": "string",
+      "defaultValue": "main",
+      "metadata": {
+        "description": "Branch to deploy."
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2024-03-01",
+      "name": "[parameters('resourceGroupName')]",
+      "location": "[parameters('location')]"
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "cloudlens-resources",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "aiLocation": {
+            "value": "[parameters('aiLocation')]"
+          },
+          "appName": {
+            "value": "[parameters('appName')]"
+          },
+          "sku": {
+            "value": "[parameters('sku')]"
+          },
+          "modelName": {
+            "value": "[parameters('modelName')]"
+          },
+          "modelCapacity": {
+            "value": "[parameters('modelCapacity')]"
+          },
+          "modelSku": {
+            "value": "[parameters('modelSku')]"
+          },
+          "adminEmails": {
+            "value": "[parameters('adminEmails')]"
+          },
+          "entraClientId": {
+            "value": "[parameters('entraClientId')]"
+          },
+          "entraTenantId": "[if(empty(parameters('entraTenantId')), createObject('value', subscription().tenantId), createObject('value', parameters('entraTenantId')))]",
+          "entraClientSecret": {
+            "value": "[parameters('entraClientSecret')]"
+          },
+          "repositoryUrl": {
+            "value": "[parameters('repositoryUrl')]"
+          },
+          "branch": {
+            "value": "[parameters('branch')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.44.1.10279",
+              "templateHash": "99039399708709718"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Region for the app and storage."
+              }
+            },
+            "aiLocation": {
+              "type": "string",
+              "metadata": {
+                "description": "Region for the AI account, which may differ from the app."
+              }
+            },
+            "appName": {
+              "type": "string",
+              "metadata": {
+                "description": "Base name for resources."
+              }
+            },
+            "sku": {
+              "type": "string",
+              "metadata": {
+                "description": "App Service plan size."
+              }
+            },
+            "modelName": {
+              "type": "string",
+              "metadata": {
+                "description": "Model to deploy."
+              }
+            },
+            "modelCapacity": {
+              "type": "int",
+              "metadata": {
+                "description": "Tokens-per-minute quota, in thousands."
+              }
+            },
+            "modelSku": {
+              "type": "string",
+              "metadata": {
+                "description": "Model deployment SKU."
+              }
+            },
+            "adminEmails": {
+              "type": "string",
+              "metadata": {
+                "description": "Admin email addresses, comma separated."
+              }
+            },
+            "entraClientId": {
+              "type": "string",
+              "metadata": {
+                "description": "Entra client id, or empty for local sign-in."
+              }
+            },
+            "entraTenantId": {
+              "type": "string",
+              "metadata": {
+                "description": "Entra tenant id."
+              }
+            },
+            "entraClientSecret": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Entra client secret, if the registration needs one."
+              }
+            },
+            "repositoryUrl": {
+              "type": "string",
+              "metadata": {
+                "description": "Repository to deploy from."
+              }
+            },
+            "branch": {
+              "type": "string",
+              "metadata": {
+                "description": "Branch to deploy."
+              }
+            }
+          },
+          "variables": {
+            "suffix": "[substring(uniqueString(resourceGroup().id), 0, 6)]",
+            "webAppName": "[format('{0}-{1}', parameters('appName'), variables('suffix'))]",
+            "storageName": "[toLower(format('{0}{1}', take(replace(parameters('appName'), '-', ''), 11), variables('suffix')))]",
+            "foundryName": "[format('{0}-ai-{1}', parameters('appName'), variables('suffix'))]",
+            "planName": "[format('asp-{0}-{1}', parameters('appName'), variables('suffix'))]",
+            "projectName": "cloudlens",
+            "blobContributor": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
+            "openAiUser": "5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Storage/storageAccounts",
+              "apiVersion": "2023-05-01",
+              "name": "[variables('storageName')]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "Standard_LRS"
+              },
+              "kind": "StorageV2",
+              "properties": {
+                "minimumTlsVersion": "TLS1_2",
+                "supportsHttpsTrafficOnly": true,
+                "allowBlobPublicAccess": false,
+                "allowSharedKeyAccess": false
+              }
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/blobServices",
+              "apiVersion": "2023-05-01",
+              "name": "[format('{0}/{1}', variables('storageName'), 'default')]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('storageName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+              "apiVersion": "2023-05-01",
+              "name": "[format('{0}/{1}/{2}', variables('storageName'), 'default', 'cloudlens')]",
+              "properties": {
+                "publicAccess": "None"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/blobServices', variables('storageName'), 'default')]"
+              ]
+            },
+            {
+              "type": "Microsoft.CognitiveServices/accounts",
+              "apiVersion": "2024-10-01",
+              "name": "[variables('foundryName')]",
+              "location": "[parameters('aiLocation')]",
+              "kind": "AIServices",
+              "sku": {
+                "name": "S0"
+              },
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "properties": {
+                "customSubDomainName": "[variables('foundryName')]",
+                "publicNetworkAccess": "Enabled",
+                "disableLocalAuth": true
+              }
+            },
+            {
+              "type": "Microsoft.CognitiveServices/accounts/projects",
+              "apiVersion": "2025-04-01-preview",
+              "name": "[format('{0}/{1}', variables('foundryName'), variables('projectName'))]",
+              "location": "[parameters('aiLocation')]",
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "properties": {
+                "displayName": "CloudLens",
+                "description": "Cost analysis agent"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('foundryName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.CognitiveServices/accounts/deployments",
+              "apiVersion": "2024-10-01",
+              "name": "[format('{0}/{1}', variables('foundryName'), parameters('modelName'))]",
+              "sku": {
+                "name": "[parameters('modelSku')]",
+                "capacity": "[parameters('modelCapacity')]"
+              },
+              "properties": {
+                "model": {
+                  "format": "OpenAI",
+                  "name": "[parameters('modelName')]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('foundryName'))]",
+                "[resourceId('Microsoft.CognitiveServices/accounts/projects', variables('foundryName'), variables('projectName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Web/serverfarms",
+              "apiVersion": "2023-12-01",
+              "name": "[variables('planName')]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "[parameters('sku')]"
+              },
+              "kind": "linux",
+              "properties": {
+                "reserved": true
+              }
+            },
+            {
+              "type": "Microsoft.Web/sites",
+              "apiVersion": "2023-12-01",
+              "name": "[variables('webAppName')]",
+              "location": "[parameters('location')]",
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "properties": {
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('planName'))]",
+                "httpsOnly": true,
+                "siteConfig": {
+                  "linuxFxVersion": "PYTHON|3.13",
+                  "alwaysOn": true,
+                  "ftpsState": "Disabled",
+                  "minTlsVersion": "1.2",
+                  "numberOfWorkers": 1,
+                  "appCommandLine": "python -m uvicorn app.main:app --host 0.0.0.0 --port 8000",
+                  "appSettings": [
+                    {
+                      "name": "SCM_DO_BUILD_DURING_DEPLOYMENT",
+                      "value": "true"
+                    },
+                    {
+                      "name": "PROJECT_ENDPOINT",
+                      "value": "[format('{0}api/projects/{1}', reference(resourceId('Microsoft.CognitiveServices/accounts', variables('foundryName')), '2024-10-01').endpoint, variables('projectName'))]"
+                    },
+                    {
+                      "name": "MODEL_DEPLOYMENT_NAME",
+                      "value": "[parameters('modelName')]"
+                    },
+                    {
+                      "name": "COST_DB",
+                      "value": "/home/data/costs.duckdb"
+                    },
+                    {
+                      "name": "AUTH_DATA_DIR",
+                      "value": "/home/data"
+                    },
+                    {
+                      "name": "ARCHIVE_ACCOUNT",
+                      "value": "[variables('storageName')]"
+                    },
+                    {
+                      "name": "ARCHIVE_CONTAINER",
+                      "value": "cloudlens"
+                    },
+                    {
+                      "name": "ARCHIVE_ACCOUNT_ID",
+                      "value": "[resourceId('Microsoft.Storage/storageAccounts', variables('storageName'))]"
+                    },
+                    {
+                      "name": "AUTH_ADMINS",
+                      "value": "[parameters('adminEmails')]"
+                    },
+                    {
+                      "name": "AUTH_CLIENT_ID",
+                      "value": "[parameters('entraClientId')]"
+                    },
+                    {
+                      "name": "AUTH_TENANT_ID",
+                      "value": "[if(empty(parameters('entraClientId')), '', parameters('entraTenantId'))]"
+                    },
+                    {
+                      "name": "AUTH_CLIENT_SECRET",
+                      "value": "[parameters('entraClientSecret')]"
+                    },
+                    {
+                      "name": "AUTH_REDIRECT_URI",
+                      "value": "[format('https://{0}.azurewebsites.net/auth/callback', variables('webAppName'))]"
+                    },
+                    {
+                      "name": "AUTH_COOKIE_SECURE",
+                      "value": "true"
+                    },
+                    {
+                      "name": "COST_CLIENT_TYPE",
+                      "value": "CloudLens"
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('foundryName'))]",
+                "[resourceId('Microsoft.Web/serverfarms', variables('planName'))]",
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('storageName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Web/sites/sourcecontrols",
+              "apiVersion": "2023-12-01",
+              "name": "[format('{0}/{1}', variables('webAppName'), 'web')]",
+              "properties": {
+                "repoUrl": "[parameters('repositoryUrl')]",
+                "branch": "[parameters('branch')]",
+                "isManualIntegration": true
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', variables('webAppName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', variables('storageName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', variables('storageName')), resourceId('Microsoft.Web/sites', variables('webAppName')), variables('blobContributor'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('blobContributor'))]",
+                "principalId": "[reference(resourceId('Microsoft.Web/sites', variables('webAppName')), '2023-12-01', 'full').identity.principalId]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('storageName'))]",
+                "[resourceId('Microsoft.Web/sites', variables('webAppName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.CognitiveServices/accounts', variables('foundryName'))]",
+              "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', variables('foundryName')), resourceId('Microsoft.Web/sites', variables('webAppName')), variables('openAiUser'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('openAiUser'))]",
+                "principalId": "[reference(resourceId('Microsoft.Web/sites', variables('webAppName')), '2023-12-01', 'full').identity.principalId]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('foundryName'))]",
+                "[resourceId('Microsoft.Web/sites', variables('webAppName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "principalId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Web/sites', variables('webAppName')), '2023-12-01', 'full').identity.principalId]"
+            },
+            "defaultHostName": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Web/sites', variables('webAppName')), '2023-12-01').defaultHostName]"
+            },
+            "webAppName": {
+              "type": "string",
+              "value": "[variables('webAppName')]"
+            },
+            "projectEndpoint": {
+              "type": "string",
+              "value": "[format('{0}api/projects/{1}', reference(resourceId('Microsoft.CognitiveServices/accounts', variables('foundryName')), '2024-10-01').endpoint, variables('projectName'))]"
+            },
+            "storageAccount": {
+              "type": "string",
+              "value": "[variables('storageName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "cloudlens-rbac",
+      "location": "[deployment().location]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "principalId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'cloudlens-resources'), '2025-04-01').outputs.principalId.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.44.1.10279",
+              "templateHash": "3836902577260486012"
+            }
+          },
+          "parameters": {
+            "principalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Object id of the web app managed identity."
+              }
+            }
+          },
+          "variables": {
+            "reader": "acdd72a7-3385-48ef-bd42-f606fba81ae7",
+            "costReader": "72fafb9e-0641-4937-9268-a91bfd8191a3"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(subscription().id, parameters('principalId'), variables('reader'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('reader'))]",
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(subscription().id, parameters('principalId'), variables('costReader'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('costReader'))]",
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'cloudlens-resources')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "appUrl": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'cloudlens-resources'), '2025-04-01').outputs.defaultHostName.value)]"
+    },
+    "appName": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'cloudlens-resources'), '2025-04-01').outputs.webAppName.value]"
+    },
+    "resourceGroup": {
+      "type": "string",
+      "value": "[parameters('resourceGroupName')]"
+    },
+    "principalId": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'cloudlens-resources'), '2025-04-01').outputs.principalId.value]"
+    },
+    "projectEndpoint": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'cloudlens-resources'), '2025-04-01').outputs.projectEndpoint.value]"
+    },
+    "storageAccount": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'cloudlens-resources'), '2025-04-01').outputs.storageAccount.value]"
+    },
+    "redirectUri": {
+      "type": "string",
+      "value": "[format('https://{0}/auth/callback', reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'cloudlens-resources'), '2025-04-01').outputs.defaultHostName.value)]"
+    }
+  }
+}

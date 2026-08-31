@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark light" />
+  <meta name="theme-color" content="#1B1A19" />
+  <meta name="robots" content="noindex" />
+  <title>Sign in · CloudLens</title>
+
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/assets/app.css" />
+
+  <!-- Same pre-paint theme application as the app shell: signing in and landing on a
+       differently-themed page is a seam worth avoiding. -->
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem("costTheme");
+        document.documentElement.dataset.theme = saved === "light" || saved === "dark"
+          ? saved
+          : (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+      } catch (e) {
+        document.documentElement.dataset.theme = "dark";
+      }
+    })();
+  </script>
+</head>
+<body class="auth-body">
+  <main class="auth">
+    <div class="auth-card">
+      <div class="lockup">
+        <img src="/assets/logo.svg" width="64" height="64" alt="" />
+        <h1><span class="wm-1">Cloud</span><span class="wm-2">Lens</span></h1>
+        <p class="tagline">See. Analyze. Optimize.</p>
+        <p class="promise">Total clarity for your cloud spend.</p>
+      </div>
+      <p class="muted" id="lede">Sign in to ask about your Azure spend.</p>
+
+      <a class="sso-btn" id="ssoBtn" href="/auth/login" hidden>
+        <svg viewBox="0 0 23 23" aria-hidden="true" width="17" height="17">
+          <path fill="#f25022" d="M1 1h10v10H1z"/><path fill="#7fba00" d="M12 1h10v10H12z"/>
+          <path fill="#00a4ef" d="M1 12h10v10H1z"/><path fill="#ffb900" d="M12 12h10v10H12z"/>
+        </svg>
+        Sign in with Microsoft
+      </a>
+
+      <!-- Only shown while both routes are open, which is a temporary state. -->
+      <div class="auth-or" id="authOr" hidden><span>or use a local account</span></div>
+
+      <form id="loginForm" autocomplete="on" hidden>
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" autocomplete="username"
+               autocapitalize="none" spellcheck="false" />
+
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" />
+
+        <button type="submit" class="primary" id="submit">Sign in</button>
+      </form>
+
+      <!-- role=alert so the failure is announced, not just shown. -->
+      <p class="auth-error" id="error" role="alert" hidden></p>
+      <p class="fineprint">
+        Answers cover only the Azure subscriptions you have access to. Read-only.
+      </p>
+    </div>
+  </main>
+
+  <script type="module">
+    const form = document.getElementById("loginForm");
+    const errorBox = document.getElementById("error");
+    const submit = document.getElementById("submit");
+
+    // Where to land afterwards. Same rules as the server's safe_next(): a path on this site
+    // only. "//evil.example.com" and "/\evil.example.com" both start with a slash and are both
+    // read by the browser as another origin, which is exactly the trick this has to refuse.
+    const params = new URLSearchParams(location.search);
+    const requested = params.get("next") || "/";
+    const safe =
+      requested.startsWith("/") &&
+      !requested.startsWith("//") &&
+      !requested.startsWith("/\\") &&
+      !/^\/(api|auth|login)/.test(requested);
+    const next = safe ? requested : "/";
+
+    const fail = (message) => {
+      errorBox.textContent = message;
+      errorBox.hidden = false;
+    };
+
+    /** A failure body can be a string, or FastAPI's array of validation objects. */
+    const reason = (body, fallback) => {
+      const d = body && body.detail;
+      if (typeof d === "string" && d) return d;
+      if (Array.isArray(d) && d.length) return d.map((e) => e.msg || "Invalid input").join(". ");
+      return fallback;
+    };
+
+    // Entra hands failures back through ?error=, e.g. when someone declines consent or the
+    // tenant requires an administrator to approve the app first.
+    if (params.get("error")) {
+      fail(params.get("error"));
+
+      // When the block is a consent policy, the remedy is a link an administrator opens once.
+      // It points at our own endpoint rather than carrying the Entra URL in the query string:
+      // a consent link is exactly the sort of thing worth phishing with, and a page that will
+      // render any URL handed to it is an open invitation to try.
+      if (params.get("consent") === "1") {
+        const help = document.createElement("p");
+        help.className = "fineprint";
+        help.append("Send this to an administrator of your directory: ");
+        const link = document.createElement("a");
+        link.href = "/auth/admin-consent";
+        link.textContent = "grant access for your organisation";
+        help.append(link);
+        help.append(". They approve it once, then everyone there can sign in.");
+        errorBox.insertAdjacentElement("afterend", help);
+      }
+    }
+
+    // A successful admin consent comes back with a notice rather than an error.
+    if (params.get("notice")) {
+      errorBox.textContent = params.get("notice");
+      errorBox.classList.add("auth-notice");
+      errorBox.hidden = false;
+    }
+
+    // Which sign-in this deployment uses is the server's decision, not a build-time constant.
+    // A slow or wedged server must still leave a usable page rather than an empty card, so the
+    // request is given a deadline and the local form is revealed if it isn't met.
+    try {
+      const me = await fetch("/api/auth/me", { signal: AbortSignal.timeout(8000) })
+        .then((r) => r.json());
+      if (me.authenticated) {
+        location.replace(next);
+      } else {
+        const sso = me.mode === "entra";
+        if (sso) {
+          const btn = document.getElementById("ssoBtn");
+          const tenantHref = me.home_tenant
+            ? `/auth/login?next=${encodeURIComponent(next)}` +
+              `&tenant=${encodeURIComponent(me.home_tenant)}`
+            : null;
+
+          // Where a deployment serves one directory, the general work-account button sends
+          // everyone else into their own tenant's consent policy and ends at "ask your
+          // administrator" — which reads as a broken app rather than a door that was never
+          // open. Hiding it promotes the tenant sign-in to the primary button instead of
+          // leaving the page with no way in.
+          const hideWork = me.hide_work_signin && tenantHref;
+
+          btn.href = hideWork ? tenantHref : `/auth/login?next=${encodeURIComponent(next)}`;
+          btn.hidden = false;
+          document.getElementById("lede").textContent = hideWork
+            ? "Sign in with your Microsoft account. You'll see the subscriptions your own " +
+              "Azure access allows — nothing more."
+            : "Sign in with your work account. You'll see the subscriptions your own Azure " +
+              "access allows — nothing more.";
+          btn.focus();
+
+          // Azure Resource Manager is an Entra-only resource, so the multi-tenant endpoints
+          // refuse a personal Microsoft account outright — even though such accounts commonly
+          // own Visual Studio and pay-as-you-go subscriptions. A tenant sign-in does admit
+          // them, so offer it rather than leaving them at "use your work or school account".
+          if (tenantHref && !hideWork) {
+            const alt = document.createElement("p");
+            alt.className = "fineprint";
+            const link = document.createElement("a");
+            link.href = tenantHref;
+            link.textContent = "Sign in with a personal Microsoft account";
+            alt.append(link);
+            alt.append(" — for Visual Studio or pay-as-you-go subscriptions.");
+            btn.insertAdjacentElement("afterend", alt);
+          }
+        }
+        if (me.local) {
+          form.hidden = false;
+          form.username.required = true;
+          form.password.required = true;
+          if (sso) document.getElementById("authOr").hidden = false;
+          else form.username.focus();
+        }
+        if (!sso && !me.local) fail("No sign-in method is configured on the server.");
+      }
+    } catch {
+      // Unknown server state: offer both routes rather than none, so a person is never left
+      // looking at a card with no way to sign in.
+      form.hidden = false;
+      form.username.required = true;
+      form.password.required = true;
+      document.getElementById("ssoBtn").hidden = false;
+      document.getElementById("authOr").hidden = false;
+      fail("Could not check how this server signs people in. Try again, or use a local account.");
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      errorBox.hidden = true;
+      submit.disabled = true;
+      submit.textContent = "Signing in…";
+      try {
+        const res = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: form.username.value.trim(),
+            password: form.password.value,
+          }),
+        });
+        if (res.ok) {
+          location.replace(next);
+          return;
+        }
+        const body = await res.json().catch(() => ({}));
+        fail(reason(body, `Sign-in failed (${res.status}).`));
+      } catch (err) {
+        fail("Could not reach the server. Is it still running?");
+      } finally {
+        submit.disabled = false;
+        submit.textContent = "Sign in";
+        form.password.value = "";
+        form.password.focus();
+      }
+    });
+  </script>
+</body>
+</html>

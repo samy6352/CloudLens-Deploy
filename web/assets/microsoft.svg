@@ -1,0 +1,21 @@
+<!-- The Microsoft logo.
+
+     Used here because this is an internal Microsoft tool, run inside a Microsoft tenant against
+     Microsoft's own Azure subscriptions — the same way any first-party internal dashboard
+     carries it. It is *not* part of the CloudLens mark: it sits to the left, separated by a
+     rule, so it reads as "who runs this" rather than "what this is called".
+
+     Reproduced exactly — the four official squares at the official values, in the official
+     arrangement, with the official 1/12 gap. A Microsoft logo redrawn approximately is worse
+     than no logo, and the one thing that must never happen to it is being restyled to match a
+     surrounding palette. It carries its own colours on both themes for that reason.
+
+     If CloudLens is ever shown outside Microsoft, this file is the one thing that has to come
+     out. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 23 23" role="img"
+     aria-label="Microsoft">
+  <rect x="1"    y="1"    width="10" height="10" fill="#F25022"/>
+  <rect x="12"   y="1"    width="10" height="10" fill="#7FBA00"/>
+  <rect x="1"    y="12"   width="10" height="10" fill="#00A4EF"/>
+  <rect x="12"   y="12"   width="10" height="10" fill="#FFB900"/>
+</svg>
