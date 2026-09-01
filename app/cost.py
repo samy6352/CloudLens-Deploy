@@ -601,22 +601,31 @@ async def cost_forecast(subscription_ids: list[str] | None = None, days_ahead: i
         "includeFreshPartialCost": False,
     }
 
-    async def one(sub: str) -> float:
+    async def one(sub: str) -> tuple[float, str | None]:
         payload = await azure.request(
             "POST",
             f"{ARM}/subscriptions/{sub}/providers/Microsoft.CostManagement/forecast?api-version={COST_API}",
             json_body=body,
         )
-        rows, cost_col, _ = _rows(payload)
-        return sum(float(r.get(cost_col) or 0) for r in rows)
+        rows, cost_col, currency = _rows(payload)
+        return sum(float(r.get(cost_col) or 0) for r in rows), currency
 
     results = await asyncio.gather(*(one(s["id"]) for s in subs), return_exceptions=True)
-    total = sum(r for r in results if not isinstance(r, Exception))
+    answered = [r for r in results if not isinstance(r, Exception)]
+    total = sum(amount for amount, _ in answered)
     failed = [s["name"] for s, r in zip(subs, results) if isinstance(r, Exception)]
+
+    # Named only when every subscription that answered agrees on it. The total above is a bare
+    # sum, so claiming a currency for a mixed estate would put one symbol in front of a number
+    # that is not denominated in any single one of them. Unknown is the honest answer there, and
+    # callers already have to handle it for the case where nothing answered at all.
+    seen = {c for _, c in answered if c}
+    currency = seen.pop() if len(seen) == 1 else None
 
     return {
         "period": {"start": today.isoformat(), "end": end.isoformat(), "days": days_ahead},
         "projected_total": round(total, 2),
+        "currency": currency,
         "subscriptions_included": len(subs) - len(failed),
         "no_forecast_available": failed or None,
     }
@@ -817,6 +826,13 @@ async def overview(scope: list[str] | None = None) -> dict[str, Any]:
         mtd = value(got.get("mtd"), "grand_total")
         last = value(got.get("last"), "grand_total")
         currency = value(got.get("mtd"), "currency") or value(got.get("last"), "currency")
+
+    # The forecast is a separate call from the month-to-date pair, and throttling takes them
+    # independently — so the forecast regularly survives while those two come back empty. The
+    # currency above is read only from that pair, which leaves it unset in exactly the case
+    # where a figure is still on display, and the default below would then put a dollar sign in
+    # front of a number Azure billed in rupees. The forecast knows what it was quoted in.
+    currency = currency or value(got.get("fc"), "currency")
 
     worst = None
     buds = got.get("buds")
