@@ -102,23 +102,24 @@ info "Signed in as: $SIGNED_IN"
 # Asked for rather than defaulted, and read with -s so it does not end up in a shell history
 # file or a CI log. Prompting beats failing three minutes into a deployment with an ARM error.
 #
-# Not asked for under --check-only. That path creates nothing and never reaches the template,
-# and the template is the only thing that ever tests the value — so requiring one there checks
-# nothing, and any string at all would satisfy it. It would also fall hardest on the people the
-# switch exists for: somebody deciding whether their subscription can host this has no reason to
-# have been given the passphrase yet. Worse here than in PowerShell, because an unanswered
-# `read` does not fail — it waits, so a --check-only run with no terminal attached would hang
-# rather than report anything.
+# Never *prompted* for under --check-only, but used when one was supplied via --passphrase or
+# CLOUDLENS_PASSPHRASE. Somebody deciding whether their subscription can host this has no reason
+# to have been given the passphrase yet, and demanding one to run a read-only check makes the
+# question unanswerable for exactly the person asking it. But the template is what ARM
+# validates, and it stops on the passphrase before evaluating a single resource — so when one
+# *is* to hand it buys the real quota and template checks.
+#
+# `|| true` because a failed read must not be the end of it. With no terminal attached the read
+# returns non-zero at EOF, and `set -e` would take that as the script's cue to exit — silently,
+# with status 1 and not a word about why, since the prompt is only shown to a terminal in the
+# first place. Letting it fall through leaves the variable empty, which the next line explains.
 if [[ $CHECK_ONLY -eq 0 && -z "$PASSPHRASE" ]]; then
-  # `|| true` because a failed read must not be the end of it. With no terminal attached the
-  # read returns non-zero at EOF, and `set -e` would take that as the script's cue to exit —
-  # silently, with status 1 and not a word about why, since the prompt is only shown to a
-  # terminal in the first place. Letting it fall through leaves the variable empty, which the
-  # next line already knows how to explain.
   read -r -s -p "    Deployment passphrase: " PASSPHRASE || true
   echo
-  [[ -z "$PASSPHRASE" ]] && fail "A deployment passphrase is required. Ask whoever gave you
-    this repository, or set CLOUDLENS_PASSPHRASE."
+fi
+if [[ $CHECK_ONLY -eq 0 && -z "$PASSPHRASE" ]]; then
+  fail "A deployment passphrase is required. Ask whoever gave you this
+    repository, or set CLOUDLENS_PASSPHRASE."
 fi
 
 # A region has to be chosen before anything is created, and the honest default is the one the
@@ -200,7 +201,15 @@ fi
 
 # Providers are registered rather than reported. A missing one is a real failure, but it is
 # also the one obstacle here that can simply be removed without asking anybody for anything.
-for NS in Microsoft.Web Microsoft.CognitiveServices Microsoft.Storage; do
+#
+# CostManagementExports earns its place by being the one that fails late and quietly. It is not
+# needed to deploy anything, so a preflight that only considers the estate would leave it out —
+# and then first-run setup asks Azure for a daily cost export, gets "RP Not Registered", and
+# falls back to the slower API path. The data still arrives, so nothing looks broken; the
+# deployment is just permanently slower than it should be, for a reason nobody would think to
+# look for. Observed on a Visual Studio subscription where it was the only one unregistered.
+for NS in Microsoft.Web Microsoft.CognitiveServices Microsoft.Storage \
+          Microsoft.CostManagement Microsoft.CostManagementExports; do
   STATE=$(az provider show -n "$NS" --query registrationState -o tsv 2>/dev/null || echo "")
   if [[ -n "$STATE" && "$STATE" != "Registered" ]]; then
     info "Registering resource provider $NS"
@@ -208,17 +217,78 @@ for NS in Microsoft.Web Microsoft.CognitiveServices Microsoft.Storage; do
   fi
 done
 
-# App Service quota. This lists what the subscription may create, not merely what the region
-# offers, which is the distinction that catches credit-based subscriptions — they start with
-# zero compute in most regions.
+# App Service capacity, asked of ARM rather than of the catalogue.
+#
+# `az appservice list-locations --sku B1` answers a different question than it appears to: it
+# lists the regions that *offer* B1, not the regions this subscription may create one in. On a
+# Visual Studio subscription those differ — verified against one that had B1 in Central India
+# and a hard limit of zero VMs in East US 2, while the catalogue listed both. The check that
+# only reads the catalogue passes and the deployment then fails on quota, which is precisely
+# the late failure this whole section exists to prevent.
+#
+# `deployment sub validate` is ARM's own preflight. It runs the resource providers' quota
+# checks and creates nothing, so it is both the authoritative answer and a free one. Doing it
+# here also validates the template itself — a bad parameter is caught before the app
+# registration is created rather than after.
 WANTED_REGION=$(echo "$LOCATION" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
 SKU_REGIONS=$(az appservice list-locations --sku "$SKU" --query "[].name" -o tsv 2>/dev/null || echo "")
 if [[ -n "$SKU_REGIONS" ]]; then
   if ! echo "$SKU_REGIONS" | tr -d '[:blank:]' | tr '[:upper:]' '[:lower:]' | grep -qx "$WANTED_REGION"; then
-    BLOCKERS+=("This subscription has no $SKU App Service quota in $LOCATION.
-    Credit-based subscriptions start with none in most regions.
-    Fix: --location with another region, or request quota at https://aka.ms/antquotahelp")
+    BLOCKERS+=("$SKU App Service is not offered in $LOCATION at all.
+    Fix: --location with another region. See https://azure.microsoft.com/regions/services/")
   fi
+fi
+
+# Validation needs the real passphrase. The template stops on it deliberately, before ARM
+# evaluates a single resource, so validating with a placeholder returns the passphrase error
+# and never reaches the quota checks — the fail-fast gate working exactly as designed, and a
+# reminder that this check reports on what it was actually able to test.
+#
+# Under --check-only there is no passphrase by design, so the deep check is skipped and said to
+# be skipped, rather than passing quietly and implying more than was verified.
+if [[ -n "$PASSPHRASE" ]]; then
+  VALIDATION=$(az deployment sub validate \
+    --location "$LOCATION" \
+    --template-file "$(dirname "$0")/../infra/main.bicep" \
+    --parameters \
+      resourceGroupName="$RG" \
+      location="$LOCATION" \
+      aiLocation="$AI_LOCATION" \
+      appName="$APP_NAME" \
+      sku="$SKU" \
+      modelName="$MODEL" \
+      modelSku="$MODEL_SKU" \
+      adminEmails="$ADMIN" \
+      deploymentPassphrase="$PASSPHRASE" \
+    2>&1 || true)
+
+  DETAIL=$(grep -oE '"message": *"[^"]{0,300}' <<< "$VALIDATION" | head -1 | cut -c13-)
+  if grep -q 'DEPLOYMENT_PASSPHRASE_IS_MISSING_OR_INCORRECT' <<< "$VALIDATION"; then
+    BLOCKERS+=("That deployment passphrase is not correct.
+    Fix: ask whoever gave you this repository. Nothing was created.")
+  elif grep -q 'SubscriptionIsOverQuotaForSku' <<< "$VALIDATION"; then
+    BLOCKERS+=("This subscription has no $SKU App Service quota in $LOCATION.
+    The region offers it; your subscription has no allowance for it here. Credit-based
+    subscriptions such as Visual Studio start with none in most regions, and one already in
+    use elsewhere does not grant another.
+    Fix: --location with a region you have quota in, or request more at
+    https://aka.ms/antquotahelp")
+  elif grep -qE 'InsufficientQuota|QuotaExceeded' <<< "$VALIDATION"; then
+    # Model capacity is reported this way rather than as a SKU problem, and names its own limit.
+    BLOCKERS+=("This subscription is over quota in $LOCATION or $AI_LOCATION.
+    ${DETAIL}
+    Fix: another region, a smaller --model-capacity, or request more quota.")
+  elif grep -qE 'AuthorizationFailed|InvalidTemplateDeployment|MissingSubscriptionRegistration|LocationNotAvailable' <<< "$VALIDATION"; then
+    # Deliberately not a catch-all. ARM emits an informational "nested deployment got
+    # short-circuited ... WhatIfEvalStopped" whenever a nested template takes a parameter it
+    # cannot evaluate ahead of time — which this one does, and which says nothing about whether
+    # the deployment would work. Treating every code as fatal turned a perfectly good region
+    # into a blocker; only the codes that mean a refusal are listed.
+    BLOCKERS+=("Azure rejected this deployment before it started.
+    ${DETAIL}")
+  fi
+else
+  NOTES+=("Skipped the quota and template checks, which need the passphrase; region availability was still checked.")
 fi
 
 # Model availability, which is quota of a different kind and independent of the one above —
@@ -395,12 +465,27 @@ rm -f "$ZIP"
 if [[ -n "$CLIENT_ID" ]]; then
   step "Pointing the sign-in redirect at the deployed app"
   OBJ_ID=$(az ad app show --id "$CLIENT_ID" --query id -o tsv)
+  # Registered under `publicClient`, which is what this app actually is. The three redirect
+  # buckets are not interchangeable and Entra enforces the difference only at redemption, so a
+  # wrong one gets through the prompt and the consent screen and fails afterwards — reading as
+  # a broken app rather than a misregistered one. Both wrong answers were observed on a real
+  # first-run deployment:
+  #
+  #   spa    AADSTS9002327, tokens "may only be redeemed via cross-origin requests" — an SPA is
+  #          expected to redeem from browser JavaScript, and this redeems server-side.
+  #   web    a confidential client, which Entra will not redeem without a client secret. The
+  #          app says so itself and names AUTH_CLIENT_SECRET.
+  #
+  # publicClient is the secretless server-side redemption this uses: MSAL PublicClientApplication
+  # with PKCE, no secret to rotate and none to leak. The other two are cleared, so re-running
+  # over a deployment made before this repairs it rather than leaving a dead URI beside a live
+  # one.
   az rest --method PATCH \
     --uri "https://graph.microsoft.com/v1.0/applications/${OBJ_ID}" \
     --headers "Content-Type=application/json" \
-    --body "{\"spa\":{\"redirectUris\":[\"${REDIRECT}\"]}}" >/dev/null \
+    --body "{\"publicClient\":{\"redirectUris\":[\"${REDIRECT}\"]},\"spa\":{\"redirectUris\":[]},\"web\":{\"redirectUris\":[]},\"isFallbackPublicClient\":true}" >/dev/null \
     || info "Could not set the redirect URI automatically. Add $REDIRECT as a
-    single-page-application redirect URI on app registration $CLIENT_ID."
+    Mobile and desktop applications (public client) redirect URI on $CLIENT_ID."
   info "Redirect: $REDIRECT"
 fi
 

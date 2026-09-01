@@ -87,7 +87,7 @@ resource container 'Microsoft.Storage/storageAccounts/blobServices/containers@20
 // Not optional. The application raises on startup without PROJECT_ENDPOINT, so a deployment
 // without a model is a deployment that does not run — which is why this is provisioned here
 // rather than left as a prerequisite for someone to discover.
-resource foundry 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
+resource foundry 'Microsoft.CognitiveServices/accounts@2025-04-01-preview' = {
   name: foundryName
   location: aiLocation
   kind: 'AIServices'
@@ -100,6 +100,13 @@ resource foundry 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
   properties: {
     customSubDomainName: foundryName
     publicNetworkAccess: 'Enabled'
+    // Required before a project can be created underneath this account. Older AIServices
+    // accounts have it on implicitly — the one this repository was first developed against
+    // does — but Azure now refuses the project with "Project can only created under AIServices
+    // Kind account with allowProjectManagement set to true" unless it is asked for here. The
+    // app needs the project: PROJECT_ENDPOINT is what it talks to, and it will not start
+    // without one.
+    allowProjectManagement: true
     // Keys off: the app calls this with its managed identity and a bearer token. Local auth
     // would be a second, weaker way in that nothing uses.
     disableLocalAuth: true

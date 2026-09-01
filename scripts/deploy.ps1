@@ -94,26 +94,24 @@ if (-not $Admin) { $Admin = $signedIn }
 # Asked for rather than defaulted. Prompting beats failing three minutes into a deployment
 # with an ARM error nobody can read.
 #
-# Not asked for under -CheckOnly. That path creates nothing and never reaches the template, and
-# the template is the only thing that ever tests the value — so requiring one there checks
-# nothing, and any string at all would satisfy it. It would also fall hardest on the people the
-# switch exists for: somebody deciding whether their subscription can host this has no reason to
-# have been given the passphrase yet, and asking them for it to run a read-only check makes the
-# question unanswerable for exactly the person asking it.
+# Never *prompted* for under -CheckOnly, but used when one was supplied. Somebody deciding
+# whether their subscription can host this has no reason to have been given the passphrase yet,
+# and demanding one to run a read-only check makes the question unanswerable for exactly the
+# person asking it. But the template is what ARM validates, and it stops on the passphrase
+# before evaluating a single resource — so when one *is* to hand, it buys the real quota and
+# template checks, and the run says which of the two it was able to do.
 $plainPassphrase = ""
-if (-not $CheckOnly) {
-  if (-not $Passphrase) {
-    if ($env:CLOUDLENS_PASSPHRASE) {
-      $Passphrase = ConvertTo-SecureString $env:CLOUDLENS_PASSPHRASE -AsPlainText -Force
-    } else {
-      $Passphrase = Read-Host "    Deployment passphrase" -AsSecureString
-    }
-  }
+if ($Passphrase) {
   $plainPassphrase = [System.Net.NetworkCredential]::new("", $Passphrase).Password
-  if (-not $plainPassphrase) {
-    Fail "A deployment passphrase is required. Ask whoever gave you this repository, or set
+} elseif ($env:CLOUDLENS_PASSPHRASE) {
+  $plainPassphrase = $env:CLOUDLENS_PASSPHRASE
+} elseif (-not $CheckOnly) {
+  $secure = Read-Host "    Deployment passphrase" -AsSecureString
+  $plainPassphrase = [System.Net.NetworkCredential]::new("", $secure).Password
+}
+if (-not $plainPassphrase -and -not $CheckOnly) {
+  Fail "A deployment passphrase is required. Ask whoever gave you this repository, or set
 CLOUDLENS_PASSPHRASE."
-  }
 }
 
 # A region has to be chosen before anything is created, and the honest default is one the
@@ -182,7 +180,15 @@ You cannot create role assignments on this subscription.
 
 # Providers are registered rather than reported. A missing one is a real failure, but it is
 # also the one obstacle here that can simply be removed without asking anybody for anything.
-foreach ($ns in @('Microsoft.Web', 'Microsoft.CognitiveServices', 'Microsoft.Storage')) {
+#
+# CostManagementExports earns its place by being the one that fails late and quietly. It is not
+# needed to deploy anything, so a preflight that only considers the estate would leave it out —
+# and then first-run setup asks Azure for a daily cost export, gets "RP Not Registered", and
+# falls back to the slower API path. The data still arrives, so nothing looks broken; the
+# deployment is just permanently slower than it should be, for a reason nobody would think to
+# look for. Observed on a Visual Studio subscription where it was the only one unregistered.
+foreach ($ns in @('Microsoft.Web', 'Microsoft.CognitiveServices', 'Microsoft.Storage',
+                  'Microsoft.CostManagement', 'Microsoft.CostManagementExports')) {
   $state = az provider show -n $ns --query registrationState -o tsv 2>$null
   if ($state -and $state -ne 'Registered') {
     Info "Registering resource provider $ns"
@@ -190,20 +196,90 @@ foreach ($ns in @('Microsoft.Web', 'Microsoft.CognitiveServices', 'Microsoft.Sto
   }
 }
 
-# App Service quota. This lists what the subscription may create, not merely what the region
-# offers, which is the distinction that catches credit-based subscriptions — they start with
-# zero compute in most regions.
+# App Service capacity, asked of ARM rather than of the catalogue.
+#
+# `az appservice list-locations --sku B1` answers a different question than it appears to: it
+# lists the regions that *offer* B1, not the regions this subscription may create one in. On a
+# Visual Studio subscription those differ — verified against one that had B1 in Central India
+# and a hard limit of zero VMs in East US 2, while the catalogue listed both. The check that
+# only reads the catalogue passes and the deployment then fails on quota, which is precisely
+# the late failure this whole section exists to prevent.
+#
+# `deployment sub validate` is ARM's own preflight. It runs the resource providers' quota
+# checks and creates nothing, so it is both the authoritative answer and a free one. Doing it
+# here also validates the template itself — a bad parameter is caught before the app
+# registration is created rather than after.
 $wanted = ($Location -replace '\s', '').ToLowerInvariant()
 $skuRegions = az appservice list-locations --sku $Sku --query "[].name" -o tsv 2>$null
 if ($skuRegions) {
   $match = @($skuRegions) | Where-Object { ($_ -replace '\s', '').ToLowerInvariant() -eq $wanted }
   if (-not $match) {
     $blockers.Add(@"
-This subscription has no $Sku App Service quota in $Location.
-    Credit-based subscriptions start with none in most regions.
-    Fix: -Location with another region, or request quota at https://aka.ms/antquotahelp
+$Sku App Service is not offered in $Location at all.
+    Fix: -Location with another region. See https://azure.microsoft.com/regions/services/
 "@)
   }
+}
+
+# Validation needs the real passphrase. The template stops on it deliberately, before ARM
+# evaluates a single resource, so validating with a placeholder returns the passphrase error
+# and never reaches the quota checks — the fail-fast gate working exactly as designed, and a
+# reminder that this check reports on what it was actually able to test.
+#
+# Under -CheckOnly there is no passphrase by design, so the deep check is skipped and said to
+# be skipped, rather than passing quietly and implying more than was verified.
+if ($plainPassphrase) {
+  $validation = az deployment sub validate `
+    --location $Location `
+    --template-file (Join-Path $PSScriptRoot "..\infra\main.bicep") `
+    --parameters `
+      resourceGroupName=$ResourceGroup `
+      location=$Location `
+      aiLocation=$AiLocation `
+      appName=$Name `
+      sku=$Sku `
+      modelName=$Model `
+      modelSku=$ModelSku `
+      adminEmails=$Admin `
+      deploymentPassphrase=$plainPassphrase `
+    2>&1 | Out-String
+
+  if ($validation -match 'DEPLOYMENT_PASSPHRASE_IS_MISSING_OR_INCORRECT') {
+    $blockers.Add(@"
+That deployment passphrase is not correct.
+    Fix: ask whoever gave you this repository. Nothing was created.
+"@)
+  } elseif ($validation -match 'SubscriptionIsOverQuotaForSku') {
+    $blockers.Add(@"
+This subscription has no $Sku App Service quota in $Location.
+    The region offers it; your subscription has no allowance for it here. Credit-based
+    subscriptions such as Visual Studio start with none in most regions, and one already in
+    use elsewhere does not grant another.
+    Fix: -Location with a region you have quota in, or request more at
+    https://aka.ms/antquotahelp
+"@)
+  } elseif ($validation -match 'InsufficientQuota|QuotaExceeded') {
+    # Model capacity is reported this way rather than as a SKU problem, and names its own limit.
+    $detail = if ($validation -match '"message":\s*"([^"]{0,300})') { $Matches[1] } else { "" }
+    $blockers.Add(@"
+This subscription is over quota in $Location or $AiLocation.
+    $detail
+    Fix: another region, a smaller -ModelCapacity, or request more quota.
+"@)
+  } elseif ($validation -match 'AuthorizationFailed|InvalidTemplateDeployment|MissingSubscriptionRegistration|LocationNotAvailable') {
+    # Deliberately not a catch-all. ARM emits an informational "nested deployment got
+    # short-circuited ... WhatIfEvalStopped" whenever a nested template takes a parameter it
+    # cannot evaluate ahead of time — which this one does, and which says nothing about whether
+    # the deployment would work. Treating every code as fatal turned a perfectly good region
+    # into a blocker; only the codes that mean a refusal are listed.
+    $detail = if ($validation -match '"message":\s*"([^"]{0,300})') { $Matches[1] } else { "" }
+    $blockers.Add(@"
+Azure rejected this deployment before it started.
+    $detail
+"@)
+  }
+} else {
+  $notes.Add("Skipped the quota and template checks, which need the passphrase; region availability was still checked.")
 }
 
 # Model availability, which is quota of a different kind and independent of the one above —
@@ -394,7 +470,27 @@ Remove-Item $zip -Force -ErrorAction SilentlyContinue
 if ($clientId) {
   Step "Pointing the sign-in redirect at the deployed app"
   $objId = az ad app show --id $clientId --query id -o tsv
-  $body = @{ spa = @{ redirectUris = @($redirect) } } | ConvertTo-Json -Compress -Depth 5
+  # Registered under `publicClient`, which is what this app actually is. The three redirect
+  # buckets are not interchangeable and Entra enforces the difference only at redemption, so a
+  # wrong one gets through the prompt and the consent screen and fails afterwards — reading as
+  # a broken app rather than a misregistered one. Both wrong answers were observed on a real
+  # first-run deployment:
+  #
+  #   spa    AADSTS9002327, tokens "may only be redeemed via cross-origin requests" — an SPA is
+  #          expected to redeem from browser JavaScript, and this redeems server-side.
+  #   web    a confidential client, which Entra will not redeem without a client secret. The
+  #          app says so itself and names AUTH_CLIENT_SECRET.
+  #
+  # publicClient is the secretless server-side redemption this uses: MSAL PublicClientApplication
+  # with PKCE, no secret to rotate and none to leak. The other two are cleared, so re-running
+  # over a deployment made before this repairs it rather than leaving a dead URI beside a live
+  # one.
+  $body = @{
+    publicClient           = @{ redirectUris = @($redirect) }
+    spa                    = @{ redirectUris = @() }
+    web                    = @{ redirectUris = @() }
+    isFallbackPublicClient = $true
+  } | ConvertTo-Json -Compress -Depth 5
   $tmp = New-TemporaryFile
   Set-Content -Path $tmp -Value $body -NoNewline
   az rest --method PATCH `
@@ -404,7 +500,7 @@ if ($clientId) {
   Remove-Item $tmp -Force
   if ($LASTEXITCODE -ne 0) {
     Info "Could not set the redirect URI automatically. Add $redirect as a"
-    Info "single-page-application redirect URI on app registration $clientId."
+    Info "Mobile and desktop applications (public client) redirect URI on $clientId."
   } else {
     Info "Redirect: $redirect"
   }
