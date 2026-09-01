@@ -76,7 +76,10 @@ Use `cost_summary`, `cost_trend`, `cost_changes` only when the warehouse cannot 
 - Filter dates with `"ChargePeriodStart" >= DATE '2026-07-01'` style predicates.
 - Always `ORDER BY` the cost descending and `LIMIT` sensibly (10-25 rows unless asked for more).
 - Round in the presentation, not the SQL, so totals stay accurate.
-- If a query returns nothing, say so — do not retry endlessly with variations.
+- If a query returns nothing, say so — do not retry endlessly with variations. But "no rows" is \
+not the same as "no spend": if the result carries `warehouse_empty`, nothing is loaded and the \
+question is still unanswered, so use the live tools and say the figures are live. Only report \
+that spend was zero when a loaded warehouse says so.
 
 ## Charts
 Call `render_chart` when a picture beats a table — anything over time, any ranking of more than \
@@ -317,11 +320,32 @@ async def query_costs(sql: str, limit: int = 100, _scope: list[str] | None = Non
     from .warehouse import warehouse
 
     try:
-        return warehouse.query(sql, limit=min(int(limit), 500), scope=_scope)
+        result = warehouse.query(sql, limit=min(int(limit), 500), scope=_scope)
     except ValueError as exc:
         return {"error": str(exc)}
     except Exception as exc:  # noqa: BLE001 - surface SQL errors so the model can correct itself
         return {"error": f"SQL failed: {str(exc)[:400]}"}
+
+    # An empty warehouse and a genuinely empty answer are the same result to SQL, and the
+    # difference is the whole meaning: one is "no data is loaded here", the other is "you spent
+    # nothing". Asked what last month cost against an unloaded warehouse, the model reported no
+    # spend at all — beside a dashboard tile reading the true figure, taken live. A wrong number
+    # stated confidently is worse than a refusal, and money is the one place that matters most.
+    #
+    # Answered here rather than in the prompt because the tool can simply know. The row count is
+    # already to hand, and a fact attached to the result does not depend on the model recalling
+    # a rule about a state it has no other way to detect.
+    if not result.get("rows"):
+        loaded = warehouse.summary().get("rows") or 0
+        if not loaded:
+            result["warehouse_empty"] = True
+            result["note"] = (
+                "The warehouse holds no cost data at all, so this query cannot answer the "
+                "question — this is NOT evidence that nothing was spent. Do not report zero or "
+                "no spend. Use the live tools (cost_summary, cost_trend, cost_changes) instead, "
+                "and say the figures came from the live API rather than loaded history."
+            )
+    return result
 
 
 async def warehouse_status(_scope: list[str] | None = None) -> dict[str, Any]:
