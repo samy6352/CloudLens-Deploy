@@ -95,9 +95,29 @@ Useful switches:
 --model-sku Standard         # if GlobalStandard is not offered in your AI region
 --no-sso                     # tenant does not let you register apps; use a password
 --resource-group rg-costs    # somewhere other than rg-cloudlens
+--check-only                 # answer "can I deploy here?" without creating anything
 ```
 
 Both scripts are safe to re-run. Failed halfway? Run it again.
+
+### Checking before you commit to anything
+
+Both scripts check the subscription before they create the first resource: whether you can grant
+the roles the app needs, whether there is App Service quota in the region, whether the model is
+offered in the AI region. Anything missing is reported all at once, and nothing is created.
+
+`--check-only` (`-CheckOnly` in PowerShell) runs just that pass and stops:
+
+```bash
+./scripts/deploy.sh --check-only
+```
+
+```powershell
+./scripts/deploy.ps1 -CheckOnly
+```
+
+It needs no passphrase, because it deploys nothing — useful when the subscription belongs to
+somebody else and the answer decides whether to ask them for anything at all.
 
 ---
 
@@ -210,10 +230,19 @@ You have Contributor but not User Access Administrator. Cost Management Reader c
 granted without it, and without that role the app can see nothing. Ask for Owner, or have an
 administrator run the deployment.
 
+The scripts now stop on this before creating anything, so there is nothing to clean up. The
+portal button cannot: an ARM template has no way to ask whether you may create a role
+assignment, so it builds the resources and fails on the grant, leaving an app that runs and
+reports an empty estate. Delete the resource group and use a script, or have an administrator
+grant the two roles by hand — the app's own setup page prints the exact command.
+
 ### "Could not register the application"
 
-Your tenant restricts app registration to administrators. Use `--no-sso` and a local password,
-or ask an administrator to create the registration and pass it with `--entra-client-id`.
+Your tenant restricts app registration to administrators. The scripts carry on with a local
+password rather than stopping, since this decides how people sign in and not whether CloudLens
+can run; re-run over the top once you have the rights to move to Azure sign-in. To skip the
+attempt entirely use `--no-sso`, or ask an administrator to create the registration and pass it
+with `--entra-client-id`.
 
 ### The dashboard loads but every question comes back 401
 

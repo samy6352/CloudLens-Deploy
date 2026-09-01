@@ -93,17 +93,27 @@ if (-not $Admin) { $Admin = $signedIn }
 
 # Asked for rather than defaulted. Prompting beats failing three minutes into a deployment
 # with an ARM error nobody can read.
-if (-not $Passphrase) {
-  if ($env:CLOUDLENS_PASSPHRASE) {
-    $Passphrase = ConvertTo-SecureString $env:CLOUDLENS_PASSPHRASE -AsPlainText -Force
-  } else {
-    $Passphrase = Read-Host "    Deployment passphrase" -AsSecureString
+#
+# Not asked for under -CheckOnly. That path creates nothing and never reaches the template, and
+# the template is the only thing that ever tests the value — so requiring one there checks
+# nothing, and any string at all would satisfy it. It would also fall hardest on the people the
+# switch exists for: somebody deciding whether their subscription can host this has no reason to
+# have been given the passphrase yet, and asking them for it to run a read-only check makes the
+# question unanswerable for exactly the person asking it.
+$plainPassphrase = ""
+if (-not $CheckOnly) {
+  if (-not $Passphrase) {
+    if ($env:CLOUDLENS_PASSPHRASE) {
+      $Passphrase = ConvertTo-SecureString $env:CLOUDLENS_PASSPHRASE -AsPlainText -Force
+    } else {
+      $Passphrase = Read-Host "    Deployment passphrase" -AsSecureString
+    }
   }
-}
-$plainPassphrase = [System.Net.NetworkCredential]::new("", $Passphrase).Password
-if (-not $plainPassphrase) {
-  Fail "A deployment passphrase is required. Ask whoever gave you this repository, or set
+  $plainPassphrase = [System.Net.NetworkCredential]::new("", $Passphrase).Password
+  if (-not $plainPassphrase) {
+    Fail "A deployment passphrase is required. Ask whoever gave you this repository, or set
 CLOUDLENS_PASSPHRASE."
+  }
 }
 
 # A region has to be chosen before anything is created, and the honest default is one the

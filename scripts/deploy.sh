@@ -101,8 +101,21 @@ info "Signed in as: $SIGNED_IN"
 
 # Asked for rather than defaulted, and read with -s so it does not end up in a shell history
 # file or a CI log. Prompting beats failing three minutes into a deployment with an ARM error.
-if [[ -z "$PASSPHRASE" ]]; then
-  read -r -s -p "    Deployment passphrase: " PASSPHRASE
+#
+# Not asked for under --check-only. That path creates nothing and never reaches the template,
+# and the template is the only thing that ever tests the value — so requiring one there checks
+# nothing, and any string at all would satisfy it. It would also fall hardest on the people the
+# switch exists for: somebody deciding whether their subscription can host this has no reason to
+# have been given the passphrase yet. Worse here than in PowerShell, because an unanswered
+# `read` does not fail — it waits, so a --check-only run with no terminal attached would hang
+# rather than report anything.
+if [[ $CHECK_ONLY -eq 0 && -z "$PASSPHRASE" ]]; then
+  # `|| true` because a failed read must not be the end of it. With no terminal attached the
+  # read returns non-zero at EOF, and `set -e` would take that as the script's cue to exit —
+  # silently, with status 1 and not a word about why, since the prompt is only shown to a
+  # terminal in the first place. Letting it fall through leaves the variable empty, which the
+  # next line already knows how to explain.
+  read -r -s -p "    Deployment passphrase: " PASSPHRASE || true
   echo
   [[ -z "$PASSPHRASE" ]] && fail "A deployment passphrase is required. Ask whoever gave you
     this repository, or set CLOUDLENS_PASSPHRASE."
