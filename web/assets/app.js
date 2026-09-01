@@ -247,6 +247,124 @@ async function boot() {
  */
 let firstRunPoll = null;
 
+/* Prerequisites — what the app's own identity is missing, and offering to fix it.
+ *
+ * Two failures this surfaces, both of which otherwise look like something else. An
+ * unregistered CostManagementExports provider makes setup fall back to the slow API path, so
+ * the data arrives and nothing appears wrong. A managed identity without Reader and Cost
+ * Management Reader reads an empty estate, which looks like having no spend rather than no
+ * permission.
+ *
+ * Shown only when something is actually missing. A panel that says "everything is fine" on a
+ * healthy deployment is a panel people learn to scroll past, and this one needs reading on the
+ * day it appears.
+ *
+ * The preview is not decoration. Granting the app's identity a role is standing access that
+ * outlives the session, so what will be granted, to which principal, on which subscriptions, is
+ * on screen before the button is pressed — and the button only ever does what was shown.
+ */
+async function loadPrereqs() {
+  const host = document.getElementById("frPrereq");
+  if (!host) return;
+
+  let p;
+  try {
+    p = await get("/api/prereqs", { timeout: 60000 });
+  } catch {
+    return; // advisory: never let this stop somebody setting their data up
+  }
+  paintPrereqs(p);
+}
+
+function prereqRow(sub) {
+  const needs = [
+    ...(sub.roles_missing || []),
+    ...(sub.providers_unregistered || []).map((n) => n.replace("Microsoft.", "")),
+  ];
+  // `can_grant === false` is a refusal; null is "we could not ask", and the two want different
+  // words — one is a blocker to hand to an administrator, the other just an unknown.
+  const state =
+    sub.ready ? `<span class="ok">ready</span>`
+    : sub.can_grant === false ? `<span class="warn">you cannot grant here</span>`
+    : sub.can_grant === null ? `<span class="muted">rights unknown</span>`
+    : `<span>will be fixed</span>`;
+  return `<tr>
+      <td>${esc(sub.name)}</td>
+      <td>${needs.length ? esc(needs.join(", ")) : "<span class='muted'>nothing</span>"}</td>
+      <td>${state}</td>
+    </tr>`;
+}
+
+function paintPrereqs(p) {
+  const host = document.getElementById("frPrereq");
+  if (!host) return;
+  host.innerHTML = "";
+  if (!p || !p.subscriptions?.length) return;
+
+  if (p.note && !p.principal_id) {
+    host.innerHTML = `<div class="banner warn">${esc(p.note)}</div>`;
+    return;
+  }
+
+  const unready = p.subscriptions.filter((s) => !s.ready);
+  if (!unready.length) return;   // nothing to say, so say nothing
+
+  const blocked = unready.filter((s) => s.can_grant === false);
+  const commands = blocked.map((s) => s.command).filter(Boolean);
+
+  host.innerHTML = `<section class="card fr-prereq">
+      <h3>This deployment is missing some access</h3>
+      <p class="muted">CloudLens reads cost as its own identity
+        (<code>${esc(p.principal_id || "unknown")}</code>). Where that identity has no roles it
+        reads an empty estate, which looks like having no spend rather than no permission.</p>
+      <table class="fr-prereq-table">
+        <thead><tr><th>Subscription</th><th>Missing</th><th></th></tr></thead>
+        <tbody>${unready.map(prereqRow).join("")}</tbody>
+      </table>
+      ${p.can_apply
+        ? `<div class="fr-actions">
+             <button type="button" id="frFix" class="primary">Grant access and register providers</button>
+           </div>
+           <p class="muted note">Runs with your own Azure access, so it can only do what you
+             could do yourself. Role assignments take a few minutes to take effect.</p>`
+        : `<p class="muted note">An administrator of this deployment can grant these.</p>`}
+      ${commands.length
+        ? `<p class="muted note">For the subscriptions you cannot grant on, an administrator can
+             run:</p><pre class="fr-cmd">${esc(commands.join("\n\n"))}</pre>`
+        : ""}
+    </section>`;
+
+  const fix = document.getElementById("frFix");
+  if (!fix) return;
+  fix.onclick = async () => {
+    fix.disabled = true;
+    fix.textContent = "Granting…";
+    let r;
+    try {
+      r = await post("/api/prereqs/apply", {}, { timeout: 120000 });
+    } catch (err) {
+      fix.disabled = false;
+      fix.textContent = "Grant access and register providers";
+      host.insertAdjacentHTML(
+        "beforeend",
+        `<div class="banner warn">${esc(err?.message || "Could not apply.")}</div>`
+      );
+      return;
+    }
+    const failed = r.subscriptions.filter((s) => !s.ok);
+    const cmds = failed.map((s) => s.command).filter(Boolean);
+    host.innerHTML = `<section class="card fr-prereq">
+        <h3>${r.changed ? "Access granted" : "Nothing needed changing"}</h3>
+        <p class="muted">${esc(r.note || "")}</p>
+        ${failed.length
+          ? `<p class="warn">${failed.length} subscription${failed.length === 1 ? "" : "s"}
+               could not be changed with your access.</p>
+             ${cmds.length ? `<pre class="fr-cmd">${esc(cmds.join("\n\n"))}</pre>` : ""}`
+          : ""}
+      </section>`;
+  };
+}
+
 async function loadFirstRun() {
   let s;
   try {
@@ -326,6 +444,7 @@ function paintFirstRun(s) {
         <p class="muted">Everything runs with your own access, and nothing is deleted or
           changed in your estate beyond adding a cost export. This is offered once.</p>
         ${stepList}
+        <div id="frPrereq"></div>
         <div class="fr-actions">
           <button type="button" id="frScan" class="primary">Set up my cost data</button>
           <button type="button" id="frSkip" class="ghost">Not now</button>
@@ -333,6 +452,9 @@ function paintFirstRun(s) {
         <p class="muted note">Choosing "not now" hides this for good — you can still load data
           any time from Refresh, or the Cost exports tab.</p>
       </section>`;
+    // Asked here rather than on every page load: this is the one moment the answer changes
+    // what somebody should do next, and the check costs an ARM call per subscription.
+    loadPrereqs();
   } else {
     host.innerHTML = `<section class="card fr-card">
         <h2>No cost data yet</h2>

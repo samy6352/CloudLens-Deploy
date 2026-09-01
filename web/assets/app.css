@@ -2435,6 +2435,47 @@ body.rail-mini.analysing .shell {
   margin: var(--s5) auto;
 }
 .fr-card h2 { margin: 0 0 var(--s3); }
+
+/* The prerequisites panel, nested inside the first-run card.
+ *
+ * Inset rather than another floating card: it is a qualification on the offer above it — "this
+ * will not work properly until the app can see your subscriptions" — and reading as a separate
+ * announcement would invite acting on one without the other.
+ */
+.fr-prereq {
+  margin: var(--s4) 0 0;
+  border-left: 3px solid var(--warn, #d18616);
+}
+.fr-prereq h3 { margin: 0 0 var(--s2); font-size: 1rem; }
+.fr-prereq-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: var(--s3);
+  font-size: 0.9rem;
+}
+.fr-prereq-table th,
+.fr-prereq-table td {
+  text-align: left;
+  padding: var(--s2) var(--s3) var(--s2) 0;
+  border-bottom: 1px solid var(--line, rgba(128, 128, 128, 0.2));
+}
+.fr-prereq-table th { font-weight: 600; opacity: 0.7; }
+.fr-prereq-table .ok { color: var(--good, #2e7d32); }
+.fr-prereq-table .warn { color: var(--warn, #d18616); }
+
+/* Selectable, and wrapped rather than scrolled sideways: this is a command somebody has to
+ * copy into a terminal, and one hidden behind a horizontal scrollbar gets copied incomplete. */
+.fr-cmd {
+  margin: var(--s3) 0 0;
+  padding: var(--s3);
+  border-radius: var(--r2, 6px);
+  background: var(--bg2, rgba(128, 128, 128, 0.1));
+  font-size: 0.82rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
+}
 .fr-actions {
   display: flex;
   gap: var(--s3);
