@@ -1524,6 +1524,81 @@ async def onboarding_dismiss(request: Request) -> JSONResponse:
     return JSONResponse({"status": "dismissed"})
 
 
+@app.get("/api/prereqs")
+async def prereqs_check(request: Request) -> JSONResponse:
+    """What this deployment still needs to read the estate properly.
+
+    A preview, and the only half of this pair anyone but an admin may call. Deliberately
+    separate from the applying half: granting the app's identity a role is standing access that
+    outlives the session, so it is shown in full and agreed to before anything happens.
+
+    Scoped to the subscriptions the caller can see, and run as them, so it reports on their
+    estate and reflects their RBAC rather than the app's.
+    """
+    from . import cost, prereqs
+
+    user = current_user(request)
+    try:
+        allowed = await permitted(user)
+    except HTTPException:
+        allowed = []
+
+    async with as_user(user):
+        subs = (await cost.list_subscriptions())["subscriptions"]
+        wanted = {s.lower() for s in allowed} if allowed is not None else None
+        scoped = [s for s in subs if wanted is None or s["id"].lower() in wanted]
+        if not scoped:
+            return JSONResponse({"subscriptions": [], "ready": 0, "fixable": 0, "blocked": 0,
+                                 "note": "You cannot see any Azure subscriptions to check."})
+        names = {s["id"]: s.get("name") or s["id"] for s in scoped}
+        result = await prereqs.check([s["id"] for s in scoped], names)
+
+    result["can_apply"] = bool(user.admin)
+    return JSONResponse(result)
+
+
+@app.post("/api/prereqs/apply")
+async def prereqs_apply(request: Request) -> JSONResponse:
+    """Grant what the signed-in admin's own access allows, and name what it does not.
+
+    Runs as them, so Azure decides: a subscription they own is fixed, one they merely read
+    refuses them, and the refusal comes back with the command an administrator can run. One
+    refusal never stops the others — a mixed estate is the normal case, not an error.
+    """
+    from . import cost, prereqs
+
+    user = require_admin(request)
+    try:
+        allowed = await permitted(user)
+    except HTTPException:
+        allowed = []
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 - no body means "everything I can see"
+        pass
+    asked = {str(s).lower() for s in (body.get("subscription_ids") or [])}
+
+    async with as_user(user):
+        subs = (await cost.list_subscriptions())["subscriptions"]
+        wanted = {s.lower() for s in allowed} if allowed is not None else None
+        scoped = [s for s in subs
+                  if (wanted is None or s["id"].lower() in wanted)
+                  and (not asked or s["id"].lower() in asked)]
+        if not scoped:
+            raise HTTPException(400, "No subscriptions you can see were selected.")
+        names = {s["id"]: s.get("name") or s["id"] for s in scoped}
+        try:
+            result = await prereqs.apply([s["id"] for s in scoped], names)
+        except prereqs.PrereqError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    log.info("prerequisites applied by %s over %d subscription(s): %d changed, %d failed",
+             user.name, len(scoped), result["changed"], result["failed"])
+    return JSONResponse(result)
+
+
 @app.get("/api/archive")
 async def archive_status(request: Request, limit: int = 20) -> JSONResponse:
     """What the daily archive holds, and whether it can be reached.
